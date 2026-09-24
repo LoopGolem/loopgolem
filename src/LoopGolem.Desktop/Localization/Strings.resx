@@ -57,4 +57,7 @@
   <data name="CodexCliMissingWsl" xml:space="preserve"><value>Install Codex in WSL</value></data>
   <data name="CodexAuthRequiredWsl" xml:space="preserve"><value>ChatGPT login required in WSL</value></data>
   <data name="CodexAuthRequired" xml:space="preserve"><value>ChatGPT login required</value></data>
+  <data name="TestCodex" xml:space="preserve"><value>Test Codex</value></data>
+  <data name="CodexSmokeRunning" xml:space="preserve"><value>Running Codex WSL smoke test…</value></data>
+  <data name="CodexSmokeFailed" xml:space="preserve"><value>Codex smoke test failed.</value></data>
 </root>

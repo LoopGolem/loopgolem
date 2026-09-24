@@ -22,6 +22,13 @@ public sealed class WorkerPipeClient
             cancellationToken,
             TimeSpan.FromSeconds(60));
 
+    public Task<WorkerResponse> RunCodexSmokeTestAsync(
+        CancellationToken cancellationToken = default) =>
+        SendAsync(
+            new WorkerRequest(WorkerProtocol.RunCodexSmokeTest),
+            cancellationToken,
+            TimeSpan.FromMinutes(4));
+
     public Task<WorkerResponse> CreateMissionAsync(
         string goal,
         string workspacePath,
