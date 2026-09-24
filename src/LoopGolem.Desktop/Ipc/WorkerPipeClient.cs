@@ -20,7 +20,7 @@ public sealed class WorkerPipeClient
         SendAsync(
             new WorkerRequest(WorkerProtocol.GetCodexStatus),
             cancellationToken,
-            TimeSpan.FromSeconds(15));
+            TimeSpan.FromSeconds(60));
 
     public Task<WorkerResponse> CreateMissionAsync(
         string goal,

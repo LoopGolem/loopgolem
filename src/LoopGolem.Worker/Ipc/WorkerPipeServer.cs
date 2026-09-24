@@ -71,8 +71,21 @@ public sealed class WorkerPipeServer(
                 exception.Message);
         }
 
-        await writer.WriteLineAsync(
-            JsonSerializer.Serialize(response, JsonOptions));
+        try
+        {
+            await writer.WriteLineAsync(
+                JsonSerializer.Serialize(response, JsonOptions));
+        }
+        catch (IOException)
+        {
+            // The client may time out, close the window, or otherwise disconnect
+            // before a slower request finishes. A broken response pipe is a normal
+            // transport condition and must not stop the Worker.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The connection was disposed before the response could be written.
+        }
     }
 
     private async Task<WorkerResponse> HandleRequestAsync(
