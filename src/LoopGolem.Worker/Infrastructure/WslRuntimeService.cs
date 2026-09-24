@@ -101,6 +101,19 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
                 null);
     }
 
+    public Task<ProcessRunResult> RunLoginShellCommandAsync(
+        string distribution,
+        string command,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default,
+        string? standardInput = null) =>
+        RunAsync(
+            distribution,
+            ["bash", "-lc", command],
+            timeout,
+            cancellationToken,
+            standardInput);
+
     public Task<ProcessRunResult> RunLoginShellExecutableAsync(
         string distribution,
         string executable,
@@ -109,22 +122,17 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
         CancellationToken cancellationToken = default,
         string? standardInput = null)
     {
-        // bash -lc receives the executable as $0 and the remaining arguments as
-        // positional parameters. This gives us the user's login-shell PATH while
-        // keeping every Codex argument out of the shell command string.
-        var linuxArguments = new List<string>
+        var commandParts = new List<string>
         {
-            "bash",
-            "-lc",
-            "exec \"$0\" \"$@\"",
-            executable
+            "exec",
+            BashQuote(executable)
         };
 
-        linuxArguments.AddRange(arguments);
+        commandParts.AddRange(arguments.Select(BashQuote));
 
-        return RunAsync(
+        return RunLoginShellCommandAsync(
             distribution,
-            linuxArguments,
+            string.Join(" ", commandParts),
             timeout,
             cancellationToken,
             standardInput);
@@ -197,6 +205,11 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    private static string BashQuote(string value) =>
+        value.Length == 0
+            ? "''"
+            : "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
 
     private static bool IsInfrastructureDistribution(string name) =>
         name.StartsWith(

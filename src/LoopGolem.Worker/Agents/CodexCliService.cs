@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LoopGolem.Core.Domain;
@@ -27,8 +28,18 @@ public sealed class CodexCliService
     public const string DefaultModel = "gpt-6-luna";
     public const string DefaultReasoningEffort = "low";
 
-    private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(15);
+    private const string WindowsProbeCommand =
+        "command -v codex; codex --version; codex login status";
+
+    private const string SmokeMarkerName =
+        "loopgolem-codex-smoke.txt";
+
+    private const string SmokeMarkerContent =
+        "LoopGolem Codex WSL smoke test succeeded.";
+
+    private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SmokeTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromMinutes(60);
 
     private static readonly JsonSerializerOptions JsonOptions =
@@ -49,6 +60,149 @@ public sealed class CodexCliService
         return OperatingSystem.IsWindows()
             ? await GetWindowsStatusAsync(cancellationToken)
             : await GetNativeStatusAsync(cancellationToken);
+    }
+
+    public async Task<CodexSmokeTestResult> RunSmokeTestAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return new CodexSmokeTestResult(
+                false,
+                "The integrated Codex smoke test currently targets the Windows + WSL runtime.",
+                "Run the native Codex status check on Linux.",
+                Model: DefaultModel);
+        }
+
+        var distribution = await _wsl.ResolveDistributionAsync(
+            cancellationToken);
+
+        if (!distribution.Success ||
+            string.IsNullOrWhiteSpace(distribution.Distribution))
+        {
+            return new CodexSmokeTestResult(
+                false,
+                "No usable WSL Linux distribution was found.",
+                distribution.Error ?? "WSL distribution resolution failed.",
+                Model: DefaultModel);
+        }
+
+        var distro = distribution.Distribution;
+        var probe = await _wsl.RunLoginShellCommandAsync(
+            distro,
+            WindowsProbeCommand,
+            StatusTimeout,
+            cancellationToken);
+
+        var probeText = JoinProcessText(probe);
+
+        if (probe.TimedOut ||
+            probe.ExitCode != 0 ||
+            !probeText.Contains(
+                "Logged in using ChatGPT",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return new CodexSmokeTestResult(
+                false,
+                "The WSL Codex probe did not confirm ChatGPT authentication.",
+                FormatDiagnostic("probe", probe),
+                distro,
+                ExtractVersion(probeText),
+                DefaultModel);
+        }
+
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "LoopGolem",
+            "codex-smoke",
+            Guid.NewGuid().ToString("N"));
+
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            var wslRoot = await _wsl.ConvertWindowsPathAsync(
+                distro,
+                root,
+                cancellationToken);
+
+            var prompt =
+                $"Create a file named {SmokeMarkerName} in the current workspace " +
+                $"containing exactly: {SmokeMarkerContent} " +
+                "Do not create or modify any other file. " +
+                "When finished, respond concisely.";
+
+            var run = await _wsl.RunLoginShellExecutableAsync(
+                distro,
+                "codex",
+                BuildSmokeArguments(wslRoot),
+                SmokeTimeout,
+                cancellationToken,
+                prompt);
+
+            var markerPath = Path.Combine(root, SmokeMarkerName);
+            var markerExists = File.Exists(markerPath);
+            var markerText = markerExists
+                ? (await File.ReadAllTextAsync(
+                    markerPath,
+                    cancellationToken)).Trim()
+                : null;
+
+            var markerMatches = string.Equals(
+                markerText,
+                SmokeMarkerContent,
+                StringComparison.Ordinal);
+
+            var details = new StringBuilder()
+                .AppendLine($"Distribution: {distro}")
+                .AppendLine($"Model: {DefaultModel}")
+                .AppendLine($"Reasoning: {DefaultReasoningEffort}")
+                .AppendLine($"Marker created: {markerExists}")
+                .AppendLine($"Marker exact match: {markerMatches}")
+                .AppendLine()
+                .AppendLine(FormatDiagnostic("probe", probe))
+                .AppendLine()
+                .AppendLine(FormatDiagnostic("codex exec", run))
+                .ToString()
+                .Trim();
+
+            var success =
+                !run.TimedOut &&
+                run.ExitCode == 0 &&
+                markerMatches;
+
+            return new CodexSmokeTestResult(
+                success,
+                success
+                    ? "Codex WSL smoke test succeeded: the agent wrote a verified file through LoopGolem."
+                    : "Codex WSL smoke test failed: LoopGolem did not observe the expected verified file.",
+                details,
+                distro,
+                ExtractVersion(probeText),
+                DefaultModel);
+        }
+        catch (Exception exception) when (
+            exception is not OperationCanceledException)
+        {
+            return new CodexSmokeTestResult(
+                false,
+                "Codex WSL smoke test failed with an exception.",
+                exception.ToString(),
+                distro,
+                ExtractVersion(probeText),
+                DefaultModel);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Smoke-test cleanup must not hide the actual diagnostic result.
+            }
+        }
     }
 
     public async Task<TaskExecutionResult> ExecuteAsync(
@@ -311,13 +465,12 @@ public sealed class CodexCliService
 
         var distro = distribution.Distribution;
 
-        ProcessRunResult version;
+        ProcessRunResult probe;
         try
         {
-            version = await _wsl.RunLoginShellExecutableAsync(
+            probe = await _wsl.RunLoginShellCommandAsync(
                 distro,
-                "codex",
-                ["--version"],
+                WindowsProbeCommand,
                 StatusTimeout,
                 cancellationToken);
         }
@@ -334,50 +487,45 @@ public sealed class CodexCliService
                 DefaultModel);
         }
 
-        if (version.TimedOut || version.ExitCode != 0)
+        var probeText = JoinProcessText(probe);
+        var chatGpt = IsChatGptLogin(probe, probeText);
+        var version = ExtractVersion(probeText);
+
+        if (probe.TimedOut || probe.ExitCode != 0)
         {
             return new CodexRuntimeStatus(
                 false,
                 false,
-                null,
-                "Codex CLI is not installed or could not be started inside the selected WSL distribution.",
+                version,
+                FormatDiagnostic("WSL Codex probe", probe),
                 CodexRuntimeState.CodexCliMissing,
                 "wsl",
                 distro,
                 DefaultModel);
         }
 
-        var login = await _wsl.RunLoginShellExecutableAsync(
-            distro,
-            "codex",
-            ["login", "status"],
-            StatusTimeout,
-            cancellationToken);
-
-        var loginText = JoinProcessText(login);
-        var chatGpt = IsChatGptLogin(login, loginText);
-
-        var versionText = version.StandardOutput.Trim();
-        if (string.IsNullOrWhiteSpace(versionText))
+        if (!chatGpt)
         {
-            versionText = version.StandardError.Trim();
+            return new CodexRuntimeStatus(
+                true,
+                false,
+                version,
+                FormatDiagnostic("WSL Codex probe", probe),
+                CodexRuntimeState.AuthenticationRequired,
+                "wsl",
+                distro,
+                DefaultModel);
         }
 
         return new CodexRuntimeStatus(
-            Available: true,
-            ChatGptAuthenticated: chatGpt,
-            Version: string.IsNullOrWhiteSpace(versionText)
-                ? null
-                : versionText,
-            Message: chatGpt
-                ? $"Codex is ready inside WSL distribution '{distro}' using ChatGPT authentication."
-                : "Codex CLI is installed in WSL but is not authenticated with ChatGPT. Run 'codex' inside that WSL distribution and choose Sign in with ChatGPT.",
-            State: chatGpt
-                ? CodexRuntimeState.Ready
-                : CodexRuntimeState.AuthenticationRequired,
-            Runtime: "wsl",
-            Distribution: distro,
-            Model: DefaultModel);
+            true,
+            true,
+            version,
+            $"Codex is ready inside WSL distribution '{distro}' using ChatGPT authentication.",
+            CodexRuntimeState.Ready,
+            "wsl",
+            distro,
+            DefaultModel);
     }
 
     private async Task<CodexRuntimeStatus> GetNativeStatusAsync(
@@ -474,6 +622,25 @@ public sealed class CodexCliService
             "-"
         ];
 
+    private static IReadOnlyList<string> BuildSmokeArguments(
+        string workspacePath) =>
+        [
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--disable", "apps",
+            "--disable", "plugins",
+            "--disable", "multi_agent",
+            "--color", "never",
+            "--sandbox", "workspace-write",
+            "--cd", workspacePath,
+            "--model", DefaultModel,
+            "--config", $"model_reasoning_effort=\"{DefaultReasoningEffort}\"",
+            "--config", "approval_policy=never",
+            "--config", "sandbox_workspace_write.network_access=false",
+            "-"
+        ];
+
     private async Task<(bool Success, string Output, string Error)> GetGitStatusAsync(
         string workspacePath,
         CancellationToken cancellationToken)
@@ -509,13 +676,37 @@ public sealed class CodexCliService
                 .Where(value => !string.IsNullOrWhiteSpace(value)));
 
     private static bool IsChatGptLogin(
-        ProcessRunResult login,
-        string loginText) =>
-        login.ExitCode == 0 &&
-        !login.TimedOut &&
-        loginText.Contains(
+        ProcessRunResult run,
+        string text) =>
+        run.ExitCode == 0 &&
+        !run.TimedOut &&
+        text.Contains(
             "Logged in using ChatGPT",
             StringComparison.OrdinalIgnoreCase);
+
+    private static string? ExtractVersion(string text) =>
+        text
+            .Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries |
+                StringSplitOptions.TrimEntries)
+            .FirstOrDefault(line =>
+                line.Contains("codex", StringComparison.OrdinalIgnoreCase) &&
+                line.Any(char.IsDigit));
+
+    private static string FormatDiagnostic(
+        string name,
+        ProcessRunResult run) =>
+        $"""
+        {name}
+        exit code: {run.ExitCode}
+        timed out: {run.TimedOut}
+        duration ms: {run.DurationMilliseconds}
+        stdout:
+        {run.StandardOutput.Trim()}
+        stderr:
+        {run.StandardError.Trim()}
+        """.Trim();
 
     private static string BuildPrompt(Mission mission) =>
         $"""

@@ -102,6 +102,11 @@ public sealed class WorkerPipeServer(
                     true,
                     CodexStatus: await codex.GetStatusAsync(cancellationToken));
 
+            case WorkerProtocol.RunCodexSmokeTest:
+                return new WorkerResponse(
+                    true,
+                    CodexSmokeTest: await codex.RunSmokeTestAsync(cancellationToken));
+
             case WorkerProtocol.CreateMission:
             {
                 if (string.IsNullOrWhiteSpace(request.Goal))
