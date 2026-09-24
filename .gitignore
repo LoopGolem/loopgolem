@@ -1,0 +1,35 @@
+# .NET
+bin/
+obj/
+artifacts/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# IDEs
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and local state
+*.log
+.loopgolem/
+*.db
+*.db-shm
+*.db-wal
+
+# Packaging output
+dist/
+packages/
+
+# Secrets
+.env
+.env.*
+!.env.example
