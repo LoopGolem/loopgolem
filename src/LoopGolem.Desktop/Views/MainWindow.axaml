@@ -54,8 +54,7 @@
           MinHeight="100"
           AcceptsReturn="True"
           TextWrapping="Wrap"
-          VerticalContentAlignment="Top"
-          VerticalScrollBarVisibility="Auto" />
+          VerticalContentAlignment="Top" />
 
       <Grid Grid.Row="10" ColumnDefinitions="*,Auto,12,Auto">
         <StackPanel
