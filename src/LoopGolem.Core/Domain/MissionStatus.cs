@@ -8,6 +8,7 @@ public enum MissionStatus
     WaitingForQuota,
     WaitingForApproval,
     Paused,
+    NeedsHumanAttention,
     Failed,
     Completed
 }

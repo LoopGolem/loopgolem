@@ -43,6 +43,16 @@ public sealed record MissionPlan(
     IReadOnlyList<PlannedTask> Tasks,
     IReadOnlyList<string> FinalChecks);
 
+public sealed record PlannerResult(
+    string BaseCommit,
+    MissionPlan Plan);
+
+public sealed record ValidationResult(
+    string Status,
+    string Summary,
+    IReadOnlyList<PlannedTask> Tasks,
+    string SnapshotCommit);
+
 public static class MissionPlanValidator
 {
     private static readonly HashSet<string> ReservedIds =
@@ -55,17 +65,18 @@ public static class MissionPlanValidator
         "validate-mission"
     ];
 
-    public static string? Validate(MissionPlan plan)
-    {
-        ArgumentNullException.ThrowIfNull(plan);
+    public static string? Validate(MissionPlan plan) =>
+        ValidateTasks(plan.Tasks);
 
-        if (plan.Tasks.Count > 100)
+    public static string? ValidateTasks(IReadOnlyList<PlannedTask> tasks)
+    {
+        if (tasks.Count > 100)
         {
             return "Planner returned more than 100 microtasks.";
         }
 
         var ids = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var task in plan.Tasks)
+        foreach (var task in tasks)
         {
             if (string.IsNullOrWhiteSpace(task.Id) ||
                 ReservedIds.Contains(task.Id) ||
@@ -107,7 +118,7 @@ public static class MissionPlanValidator
             }
         }
 
-        foreach (var task in plan.Tasks)
+        foreach (var task in tasks)
         {
             foreach (var dependency in task.DependsOn)
             {
@@ -120,9 +131,9 @@ public static class MissionPlanValidator
 
         var visiting = new HashSet<string>(StringComparer.Ordinal);
         var visited = new HashSet<string>(StringComparer.Ordinal);
-        var byId = plan.Tasks.ToDictionary(task => task.Id, StringComparer.Ordinal);
+        var byId = tasks.ToDictionary(task => task.Id, StringComparer.Ordinal);
 
-        foreach (var task in plan.Tasks)
+        foreach (var task in tasks)
         {
             if (HasCycle(task.Id, byId, visiting, visited))
             {
