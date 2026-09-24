@@ -11,6 +11,19 @@ public static class WorkerProtocol
     public const string GetMission = "getMission";
 }
 
+public static class WorkerErrorCodes
+{
+    public const string EmptyRequest = "empty_request";
+    public const string InvalidRequest = "invalid_request";
+    public const string InvalidJson = "invalid_json";
+    public const string MissionGoalRequired = "mission_goal_required";
+    public const string WorkspaceInvalid = "workspace_invalid";
+    public const string MissionIdRequired = "mission_id_required";
+    public const string MissionNotFound = "mission_not_found";
+    public const string UnsupportedRequest = "unsupported_request";
+    public const string InternalError = "internal_error";
+}
+
 public sealed record WorkerRequest(
     string Type,
     string? MissionId = null,
@@ -20,5 +33,6 @@ public sealed record WorkerRequest(
 public sealed record WorkerResponse(
     bool Success,
     string? Error = null,
+    string? ErrorCode = null,
     string? WorkerStatus = null,
     MissionSnapshot? Mission = null);

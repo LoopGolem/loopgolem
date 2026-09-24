@@ -45,23 +45,29 @@ public sealed class WorkerPipeServer(
             var line = await reader.ReadLineAsync(cancellationToken);
             if (string.IsNullOrWhiteSpace(line))
             {
-                response = new WorkerResponse(false, "Empty request.");
+                response = Error(
+                    WorkerErrorCodes.EmptyRequest,
+                    "Empty request.");
             }
             else
             {
                 var request = JsonSerializer.Deserialize<WorkerRequest>(line, JsonOptions);
                 response = request is null
-                    ? new WorkerResponse(false, "Invalid request.")
+                    ? Error(WorkerErrorCodes.InvalidRequest, "Invalid request.")
                     : await HandleRequestAsync(request, cancellationToken);
             }
         }
         catch (JsonException exception)
         {
-            response = new WorkerResponse(false, $"Invalid JSON: {exception.Message}");
+            response = Error(
+                WorkerErrorCodes.InvalidJson,
+                $"Invalid JSON: {exception.Message}");
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            response = new WorkerResponse(false, exception.Message);
+            response = Error(
+                WorkerErrorCodes.InternalError,
+                exception.Message);
         }
 
         await writer.WriteLineAsync(
@@ -81,13 +87,17 @@ public sealed class WorkerPipeServer(
             {
                 if (string.IsNullOrWhiteSpace(request.Goal))
                 {
-                    return new WorkerResponse(false, "Mission goal is required.");
+                    return Error(
+                        WorkerErrorCodes.MissionGoalRequired,
+                        "Mission goal is required.");
                 }
 
                 if (string.IsNullOrWhiteSpace(request.WorkspacePath) ||
                     !Directory.Exists(request.WorkspacePath))
                 {
-                    return new WorkerResponse(false, "A valid workspace directory is required.");
+                    return Error(
+                        WorkerErrorCodes.WorkspaceInvalid,
+                        "A valid workspace directory is required.");
                 }
 
                 var snapshot = await orchestrator.CreateMissionAsync(
@@ -103,7 +113,9 @@ public sealed class WorkerPipeServer(
             {
                 if (string.IsNullOrWhiteSpace(request.MissionId))
                 {
-                    return new WorkerResponse(false, "Mission id is required.");
+                    return Error(
+                        WorkerErrorCodes.MissionIdRequired,
+                        "Mission id is required.");
                 }
 
                 var snapshot = await store.GetAsync(
@@ -111,16 +123,23 @@ public sealed class WorkerPipeServer(
                     cancellationToken);
 
                 return snapshot is null
-                    ? new WorkerResponse(false, "Mission not found.")
+                    ? Error(
+                        WorkerErrorCodes.MissionNotFound,
+                        "Mission not found.")
                     : new WorkerResponse(true, Mission: snapshot);
             }
 
             default:
-                return new WorkerResponse(
-                    false,
+                return Error(
+                    WorkerErrorCodes.UnsupportedRequest,
                     $"Unsupported request type '{request.Type}'.");
         }
     }
+
+    private static WorkerResponse Error(
+        string code,
+        string message) =>
+        new(false, Error: message, ErrorCode: code);
 
     private async Task ExecuteMissionSafelyAsync(string missionId)
     {

@@ -32,4 +32,16 @@
   <data name="WaitingForApproval" xml:space="preserve"><value>ממתין לאישור</value></data>
   <data name="Paused" xml:space="preserve"><value>מושהית</value></data>
   <data name="WorkerUnavailable" xml:space="preserve"><value>ה-Worker אינו זמין. הפעילו את loopgolem-worker ונסו שוב.</value></data>
+  <data name="Tasks" xml:space="preserve"><value>משימות</value></data>
+  <data name="TaskInspectWorkspace" xml:space="preserve"><value>בדיקת סביבת העבודה</value></data>
+  <data name="TaskDiscoverProjects" xml:space="preserve"><value>איתור קובצי פרויקט</value></data>
+  <data name="Planned" xml:space="preserve"><value>מתוכננת</value></data>
+  <data name="Verifying" xml:space="preserve"><value>באימות</value></data>
+  <data name="Retrying" xml:space="preserve"><value>ניסיון חוזר</value></data>
+  <data name="Escalated" xml:space="preserve"><value>הוסלמה</value></data>
+  <data name="Blocked" xml:space="preserve"><value>חסומה</value></data>
+  <data name="NotStarted" xml:space="preserve"><value>לא התחילה</value></data>
+  <data name="WorkspaceInvalid" xml:space="preserve"><value>סביבת העבודה שנבחרה אינה קיימת עוד או שאינה נגישה.</value></data>
+  <data name="MissionGoalRequired" xml:space="preserve"><value>נדרשת מטרה למשימה.</value></data>
+  <data name="CouldNotStartMission" xml:space="preserve"><value>לא ניתן היה להתחיל את המשימה.</value></data>
 </root>

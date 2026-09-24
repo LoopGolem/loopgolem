@@ -32,4 +32,16 @@
   <data name="WaitingForApproval" xml:space="preserve"><value>در انتظار تأیید</value></data>
   <data name="Paused" xml:space="preserve"><value>متوقف</value></data>
   <data name="WorkerUnavailable" xml:space="preserve"><value>Worker در دسترس نیست. loopgolem-worker را اجرا کنید و دوباره تلاش کنید.</value></data>
+  <data name="Tasks" xml:space="preserve"><value>وظایف</value></data>
+  <data name="TaskInspectWorkspace" xml:space="preserve"><value>بررسی فضای کاری</value></data>
+  <data name="TaskDiscoverProjects" xml:space="preserve"><value>یافتن فایل‌های پروژه</value></data>
+  <data name="Planned" xml:space="preserve"><value>برنامه‌ریزی‌شده</value></data>
+  <data name="Verifying" xml:space="preserve"><value>در حال بررسی</value></data>
+  <data name="Retrying" xml:space="preserve"><value>تلاش دوباره</value></data>
+  <data name="Escalated" xml:space="preserve"><value>ارتقایافته</value></data>
+  <data name="Blocked" xml:space="preserve"><value>مسدود</value></data>
+  <data name="NotStarted" xml:space="preserve"><value>شروع نشده</value></data>
+  <data name="WorkspaceInvalid" xml:space="preserve"><value>فضای کاری انتخاب‌شده دیگر وجود ندارد یا قابل دسترسی نیست.</value></data>
+  <data name="MissionGoalRequired" xml:space="preserve"><value>هدف ماموریت لازم است.</value></data>
+  <data name="CouldNotStartMission" xml:space="preserve"><value>ماموریت شروع نشد.</value></data>
 </root>

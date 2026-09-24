@@ -32,4 +32,16 @@
   <data name="WaitingForApproval" xml:space="preserve"><value>Wartet auf Freigabe</value></data>
   <data name="Paused" xml:space="preserve"><value>Pausiert</value></data>
   <data name="WorkerUnavailable" xml:space="preserve"><value>Worker nicht verfügbar. Starte loopgolem-worker und versuche es erneut.</value></data>
+  <data name="Tasks" xml:space="preserve"><value>Aufgaben</value></data>
+  <data name="TaskInspectWorkspace" xml:space="preserve"><value>Arbeitsbereich prüfen</value></data>
+  <data name="TaskDiscoverProjects" xml:space="preserve"><value>Projektdateien finden</value></data>
+  <data name="Planned" xml:space="preserve"><value>Geplant</value></data>
+  <data name="Verifying" xml:space="preserve"><value>Wird geprüft</value></data>
+  <data name="Retrying" xml:space="preserve"><value>Erneuter Versuch</value></data>
+  <data name="Escalated" xml:space="preserve"><value>Eskaliert</value></data>
+  <data name="Blocked" xml:space="preserve"><value>Blockiert</value></data>
+  <data name="NotStarted" xml:space="preserve"><value>Nicht gestartet</value></data>
+  <data name="WorkspaceInvalid" xml:space="preserve"><value>Der ausgewählte Arbeitsbereich existiert nicht mehr oder ist nicht zugänglich.</value></data>
+  <data name="MissionGoalRequired" xml:space="preserve"><value>Ein Missionsziel ist erforderlich.</value></data>
+  <data name="CouldNotStartMission" xml:space="preserve"><value>Die Mission konnte nicht gestartet werden.</value></data>
 </root>

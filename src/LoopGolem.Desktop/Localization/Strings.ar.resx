@@ -32,4 +32,16 @@
   <data name="WaitingForApproval" xml:space="preserve"><value>بانتظار الموافقة</value></data>
   <data name="Paused" xml:space="preserve"><value>متوقفة مؤقتًا</value></data>
   <data name="WorkerUnavailable" xml:space="preserve"><value>الـ Worker غير متاح. شغّل loopgolem-worker ثم حاول مجددًا.</value></data>
+  <data name="Tasks" xml:space="preserve"><value>المهام</value></data>
+  <data name="TaskInspectWorkspace" xml:space="preserve"><value>فحص مساحة العمل</value></data>
+  <data name="TaskDiscoverProjects" xml:space="preserve"><value>اكتشاف ملفات المشروع</value></data>
+  <data name="Planned" xml:space="preserve"><value>مخططة</value></data>
+  <data name="Verifying" xml:space="preserve"><value>قيد التحقق</value></data>
+  <data name="Retrying" xml:space="preserve"><value>إعادة المحاولة</value></data>
+  <data name="Escalated" xml:space="preserve"><value>مصعّدة</value></data>
+  <data name="Blocked" xml:space="preserve"><value>محظورة</value></data>
+  <data name="NotStarted" xml:space="preserve"><value>لم تبدأ</value></data>
+  <data name="WorkspaceInvalid" xml:space="preserve"><value>مساحة العمل المحددة لم تعد موجودة أو لا يمكن الوصول إليها.</value></data>
+  <data name="MissionGoalRequired" xml:space="preserve"><value>يلزم تحديد هدف للمهمة.</value></data>
+  <data name="CouldNotStartMission" xml:space="preserve"><value>تعذر بدء المهمة.</value></data>
 </root>

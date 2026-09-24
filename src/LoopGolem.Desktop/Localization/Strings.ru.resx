@@ -32,4 +32,16 @@
   <data name="WaitingForApproval" xml:space="preserve"><value>Ожидание одобрения</value></data>
   <data name="Paused" xml:space="preserve"><value>Приостановлена</value></data>
   <data name="WorkerUnavailable" xml:space="preserve"><value>Worker недоступен. Запустите loopgolem-worker и повторите попытку.</value></data>
+  <data name="Tasks" xml:space="preserve"><value>Задачи</value></data>
+  <data name="TaskInspectWorkspace" xml:space="preserve"><value>Проверить рабочую область</value></data>
+  <data name="TaskDiscoverProjects" xml:space="preserve"><value>Найти файлы проектов</value></data>
+  <data name="Planned" xml:space="preserve"><value>Запланирована</value></data>
+  <data name="Verifying" xml:space="preserve"><value>Проверка</value></data>
+  <data name="Retrying" xml:space="preserve"><value>Повтор</value></data>
+  <data name="Escalated" xml:space="preserve"><value>Эскалирована</value></data>
+  <data name="Blocked" xml:space="preserve"><value>Заблокирована</value></data>
+  <data name="NotStarted" xml:space="preserve"><value>Не запущена</value></data>
+  <data name="WorkspaceInvalid" xml:space="preserve"><value>Выбранная рабочая область больше не существует или недоступна.</value></data>
+  <data name="MissionGoalRequired" xml:space="preserve"><value>Необходимо указать цель миссии.</value></data>
+  <data name="CouldNotStartMission" xml:space="preserve"><value>Не удалось запустить миссию.</value></data>
 </root>

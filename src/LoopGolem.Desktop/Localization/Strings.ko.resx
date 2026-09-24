@@ -32,4 +32,16 @@
   <data name="WaitingForApproval" xml:space="preserve"><value>승인 대기 중</value></data>
   <data name="Paused" xml:space="preserve"><value>일시 중지</value></data>
   <data name="WorkerUnavailable" xml:space="preserve"><value>Worker를 사용할 수 없습니다. loopgolem-worker를 실행한 뒤 다시 시도하세요.</value></data>
+  <data name="Tasks" xml:space="preserve"><value>작업</value></data>
+  <data name="TaskInspectWorkspace" xml:space="preserve"><value>작업 공간 검사</value></data>
+  <data name="TaskDiscoverProjects" xml:space="preserve"><value>프로젝트 파일 찾기</value></data>
+  <data name="Planned" xml:space="preserve"><value>계획됨</value></data>
+  <data name="Verifying" xml:space="preserve"><value>검증 중</value></data>
+  <data name="Retrying" xml:space="preserve"><value>재시도 중</value></data>
+  <data name="Escalated" xml:space="preserve"><value>에스컬레이션됨</value></data>
+  <data name="Blocked" xml:space="preserve"><value>차단됨</value></data>
+  <data name="NotStarted" xml:space="preserve"><value>시작되지 않음</value></data>
+  <data name="WorkspaceInvalid" xml:space="preserve"><value>선택한 작업 공간이 더 이상 존재하지 않거나 접근할 수 없습니다.</value></data>
+  <data name="MissionGoalRequired" xml:space="preserve"><value>미션 목표가 필요합니다.</value></data>
+  <data name="CouldNotStartMission" xml:space="preserve"><value>미션을 시작할 수 없습니다.</value></data>
 </root>

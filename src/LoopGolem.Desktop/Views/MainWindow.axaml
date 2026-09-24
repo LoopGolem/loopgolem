@@ -2,11 +2,11 @@
     xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     x:Class="LoopGolem.Desktop.Views.MainWindow"
-    Width="920"
-    Height="720"
-    MinWidth="760"
-    MinHeight="620">
-  <Grid Margin="28" RowDefinitions="Auto,18,Auto,18,Auto,16,Auto,12,*,18,Auto,12,Auto">
+    Width="940"
+    Height="820"
+    MinWidth="780"
+    MinHeight="680">
+  <Grid Margin="28" RowDefinitions="Auto,18,Auto,18,Auto,16,Auto,12,*,18,Auto,12,Auto,12,Auto">
     <StackPanel Grid.Row="0" Spacing="4">
       <TextBlock x:Name="TitleText" FontSize="30" FontWeight="SemiBold" />
       <TextBlock x:Name="SubtitleText" Opacity="0.72" TextWrapping="Wrap" />
@@ -28,7 +28,7 @@
     <TextBox
         x:Name="MissionGoalBox"
         Grid.Row="8"
-        MinHeight="150"
+        MinHeight="120"
         AcceptsReturn="True"
         TextWrapping="Wrap"
         VerticalContentAlignment="Top" />
@@ -43,6 +43,15 @@
     </Grid>
 
     <Border Grid.Row="12" Padding="12" BorderThickness="1" CornerRadius="6">
+      <StackPanel Spacing="8">
+        <TextBlock x:Name="TasksLabel" FontWeight="SemiBold" />
+        <ScrollViewer MaxHeight="180" VerticalScrollBarVisibility="Auto">
+          <StackPanel x:Name="TasksPanel" Spacing="4" />
+        </ScrollViewer>
+      </StackPanel>
+    </Border>
+
+    <Border Grid.Row="14" Padding="12" BorderThickness="1" CornerRadius="6">
       <StackPanel Spacing="6">
         <TextBlock x:Name="MissionResultLabel" FontWeight="SemiBold" />
         <TextBlock x:Name="MissionResultText" TextWrapping="Wrap" />

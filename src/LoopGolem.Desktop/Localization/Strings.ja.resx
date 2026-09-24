@@ -32,4 +32,16 @@
   <data name="WaitingForApproval" xml:space="preserve"><value>承認待ち</value></data>
   <data name="Paused" xml:space="preserve"><value>一時停止</value></data>
   <data name="WorkerUnavailable" xml:space="preserve"><value>Worker に接続できません。loopgolem-worker を起動して再試行してください。</value></data>
+  <data name="Tasks" xml:space="preserve"><value>タスク</value></data>
+  <data name="TaskInspectWorkspace" xml:space="preserve"><value>ワークスペースを検査</value></data>
+  <data name="TaskDiscoverProjects" xml:space="preserve"><value>プロジェクトファイルを検出</value></data>
+  <data name="Planned" xml:space="preserve"><value>計画済み</value></data>
+  <data name="Verifying" xml:space="preserve"><value>検証中</value></data>
+  <data name="Retrying" xml:space="preserve"><value>再試行中</value></data>
+  <data name="Escalated" xml:space="preserve"><value>エスカレーション</value></data>
+  <data name="Blocked" xml:space="preserve"><value>ブロック中</value></data>
+  <data name="NotStarted" xml:space="preserve"><value>未開始</value></data>
+  <data name="WorkspaceInvalid" xml:space="preserve"><value>選択したワークスペースは存在しないか、アクセスできません。</value></data>
+  <data name="MissionGoalRequired" xml:space="preserve"><value>ミッション目標が必要です。</value></data>
+  <data name="CouldNotStartMission" xml:space="preserve"><value>ミッションを開始できませんでした。</value></data>
 </root>

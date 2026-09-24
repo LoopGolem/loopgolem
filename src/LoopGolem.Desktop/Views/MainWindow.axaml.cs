@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
@@ -6,6 +7,7 @@ using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
 using LoopGolem.Desktop.Ipc;
 using LoopGolem.Desktop.Localization;
+using DomainTaskStatus = LoopGolem.Core.Domain.TaskStatus;
 
 namespace LoopGolem.Desktop.Views;
 
@@ -61,10 +63,12 @@ public partial class MainWindow : Window
         MissionGoalBox.PlaceholderText = LocalizationService.Get("MissionGoalHint");
         MissionStatusLabel.Text = $"{LocalizationService.Get("MissionStatus")}:";
         MissionStatusValue.Text = LocalizationService.Get("Ready");
+        TasksLabel.Text = LocalizationService.Get("Tasks");
         MissionResultLabel.Text = LocalizationService.Get("MissionResult");
         SettingsButton.Content = LocalizationService.Get("Settings");
         StartButton.Content = LocalizationService.Get("StartMission");
         MissionResultText.Text = string.Empty;
+        RenderTasks([]);
     }
 
     private async Task RefreshWorkerStatusAsync()
@@ -132,6 +136,9 @@ public partial class MainWindow : Window
 
         _workspacePath = selected;
         WorkspaceBox.Text = selected;
+        MissionStatusValue.Text = LocalizationService.Get("Ready");
+        MissionResultText.Text = string.Empty;
+        RenderTasks([]);
         UpdateStartButtonState();
     }
 
@@ -158,6 +165,7 @@ public partial class MainWindow : Window
 
         StartButton.IsEnabled = false;
         MissionResultText.Text = string.Empty;
+        RenderTasks([]);
         MissionStatusValue.Text = LocalizationService.Get("Planning");
 
         WorkerResponse response;
@@ -171,6 +179,7 @@ public partial class MainWindow : Window
         {
             _workerConnected = false;
             WorkerStatusText.Text = LocalizationService.Get("Disconnected");
+            MissionStatusValue.Text = LocalizationService.Get("NotStarted");
             MissionResultText.Text = LocalizationService.Get("WorkerUnavailable");
             UpdateStartButtonState();
             return;
@@ -178,12 +187,13 @@ public partial class MainWindow : Window
 
         if (!response.Success || response.Mission is null)
         {
-            MissionStatusValue.Text = LocalizationService.Get("Failed");
-            MissionResultText.Text = response.Error
-                ?? LocalizationService.Get("Failed");
+            MissionStatusValue.Text = LocalizationService.Get("NotStarted");
+            MissionResultText.Text = GetWorkerErrorText(response);
             UpdateStartButtonState();
             return;
         }
+
+        RenderTasks(response.Mission.Tasks);
 
         _missionPolling?.Cancel();
         _missionPolling?.Dispose();
@@ -227,17 +237,17 @@ public partial class MainWindow : Window
             if (!response.Success || response.Mission is null)
             {
                 MissionStatusValue.Text = LocalizationService.Get("Failed");
-                MissionResultText.Text = response.Error
-                    ?? LocalizationService.Get("Failed");
+                MissionResultText.Text = GetWorkerErrorText(response);
                 return;
             }
 
             var mission = response.Mission.Mission;
             MissionStatusValue.Text = GetMissionStatusText(mission.Status);
+            RenderTasks(response.Mission.Tasks);
 
             if (!string.IsNullOrWhiteSpace(mission.Result))
             {
-                MissionResultText.Text = mission.Result;
+                MissionResultText.Text = BuildDisplayResult(response.Mission.Tasks);
             }
             else if (!string.IsNullOrWhiteSpace(mission.Error))
             {
@@ -252,6 +262,104 @@ public partial class MainWindow : Window
             await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken);
         }
     }
+
+    private void RenderTasks(IReadOnlyList<MissionTask> tasks)
+    {
+        TasksPanel.Children.Clear();
+
+        foreach (var task in tasks.OrderBy(task => task.Sequence))
+        {
+            var row = new DockPanel
+            {
+                LastChildFill = true,
+                Margin = new Thickness(0, 2)
+            };
+
+            var icon = new TextBlock
+            {
+                Text = GetTaskStatusSymbol(task.Status),
+                Width = 24,
+                FontWeight = task.Status == DomainTaskStatus.Running
+                    ? Avalonia.Media.FontWeight.Bold
+                    : Avalonia.Media.FontWeight.Normal
+            };
+            DockPanel.SetDock(icon, Dock.Left);
+
+            var status = new TextBlock
+            {
+                Text = GetTaskStatusText(task.Status),
+                Opacity = 0.72,
+                Margin = new Thickness(12, 0, 0, 0)
+            };
+            DockPanel.SetDock(status, Dock.Right);
+
+            var title = new TextBlock
+            {
+                Text = GetTaskTitle(task.Kind),
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
+            };
+
+            row.Children.Add(icon);
+            row.Children.Add(status);
+            row.Children.Add(title);
+            TasksPanel.Children.Add(row);
+        }
+    }
+
+    private static string GetTaskTitle(MissionTaskKind kind) =>
+        LocalizationService.Get(kind switch
+        {
+            MissionTaskKind.InspectWorkspace => "TaskInspectWorkspace",
+            MissionTaskKind.DiscoverProjects => "TaskDiscoverProjects",
+            _ => kind.ToString()
+        });
+
+    private static string GetTaskStatusText(DomainTaskStatus status) =>
+        LocalizationService.Get(status switch
+        {
+            DomainTaskStatus.Planned => "Planned",
+            DomainTaskStatus.Ready => "Ready",
+            DomainTaskStatus.Running => "Running",
+            DomainTaskStatus.Verifying => "Verifying",
+            DomainTaskStatus.Retrying => "Retrying",
+            DomainTaskStatus.Escalated => "Escalated",
+            DomainTaskStatus.Completed => "Completed",
+            DomainTaskStatus.Blocked => "Blocked",
+            DomainTaskStatus.Failed => "Failed",
+            _ => "Status"
+        });
+
+    private static string GetTaskStatusSymbol(DomainTaskStatus status) =>
+        status switch
+        {
+            DomainTaskStatus.Completed => "✓",
+            DomainTaskStatus.Failed => "✕",
+            DomainTaskStatus.Running => "●",
+            DomainTaskStatus.Verifying => "◐",
+            DomainTaskStatus.Retrying => "↻",
+            DomainTaskStatus.Blocked => "!",
+            DomainTaskStatus.Escalated => "↑",
+            _ => "○"
+        };
+
+    private static string BuildDisplayResult(
+        IEnumerable<MissionTask> tasks) =>
+        string.Join(
+            Environment.NewLine,
+            tasks
+                .OrderBy(task => task.Sequence)
+                .Where(task => !string.IsNullOrWhiteSpace(task.Result))
+                .Select(task => $"{GetTaskTitle(task.Kind)}: {task.Result}"));
+
+    private static string GetWorkerErrorText(WorkerResponse response) =>
+        response.ErrorCode switch
+        {
+            WorkerErrorCodes.WorkspaceInvalid =>
+                LocalizationService.Get("WorkspaceInvalid"),
+            WorkerErrorCodes.MissionGoalRequired =>
+                LocalizationService.Get("MissionGoalRequired"),
+            _ => response.Error ?? LocalizationService.Get("CouldNotStartMission")
+        };
 
     private static string GetMissionStatusText(MissionStatus status) =>
         LocalizationService.Get(status switch
