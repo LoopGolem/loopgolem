@@ -45,4 +45,11 @@
   <data name="MissionGoalRequired" xml:space="preserve"><value>נדרשת מטרה למשימה.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>לא ניתן היה להתחיל את המשימה.</value></data>
   <data name="TaskBuildDotNet" xml:space="preserve"><value>בניית סביבת העבודה של .NET</value></data>
+  <data name="Codex" xml:space="preserve"><value>Codex</value></data>
+  <data name="UseCodex" xml:space="preserve"><value>שימוש ב-Codex</value></data>
+  <data name="CodexReady" xml:space="preserve"><value>מוכן (ChatGPT)</value></data>
+  <data name="CodexNotChecked" xml:space="preserve"><value>לא נבדק</value></data>
+  <data name="CodexUnavailable" xml:space="preserve"><value>לא זמין</value></data>
+  <data name="TaskAgentWork" xml:space="preserve"><value>ביצוע היעד עם Codex</value></data>
+  <data name="TaskInspectGitChanges" xml:space="preserve"><value>בדיקת שינויי Git</value></data>
 </root>

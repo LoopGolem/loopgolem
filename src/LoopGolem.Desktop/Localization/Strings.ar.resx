@@ -45,4 +45,11 @@
   <data name="MissionGoalRequired" xml:space="preserve"><value>يلزم تحديد هدف للمهمة.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>تعذر بدء المهمة.</value></data>
   <data name="TaskBuildDotNet" xml:space="preserve"><value>بناء مساحة عمل .NET</value></data>
+  <data name="Codex" xml:space="preserve"><value>Codex</value></data>
+  <data name="UseCodex" xml:space="preserve"><value>استخدام Codex</value></data>
+  <data name="CodexReady" xml:space="preserve"><value>جاهز (ChatGPT)</value></data>
+  <data name="CodexNotChecked" xml:space="preserve"><value>لم يتم التحقق</value></data>
+  <data name="CodexUnavailable" xml:space="preserve"><value>غير متاح</value></data>
+  <data name="TaskAgentWork" xml:space="preserve"><value>تنفيذ الهدف باستخدام Codex</value></data>
+  <data name="TaskInspectGitChanges" xml:space="preserve"><value>فحص تغييرات Git</value></data>
 </root>

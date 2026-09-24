@@ -45,4 +45,11 @@
   <data name="MissionGoalRequired" xml:space="preserve"><value>É necessário informar um objetivo para a missão.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>Não foi possível iniciar a missão.</value></data>
   <data name="TaskBuildDotNet" xml:space="preserve"><value>Compilar workspace .NET</value></data>
+  <data name="Codex" xml:space="preserve"><value>Codex</value></data>
+  <data name="UseCodex" xml:space="preserve"><value>Usar Codex</value></data>
+  <data name="CodexReady" xml:space="preserve"><value>Pronto (ChatGPT)</value></data>
+  <data name="CodexNotChecked" xml:space="preserve"><value>Não verificado</value></data>
+  <data name="CodexUnavailable" xml:space="preserve"><value>Indisponível</value></data>
+  <data name="TaskAgentWork" xml:space="preserve"><value>Executar objetivo com Codex</value></data>
+  <data name="TaskInspectGitChanges" xml:space="preserve"><value>Inspecionar alterações do Git</value></data>
 </root>

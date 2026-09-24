@@ -45,4 +45,11 @@
   <data name="MissionGoalRequired" xml:space="preserve"><value>미션 목표가 필요합니다.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>미션을 시작할 수 없습니다.</value></data>
   <data name="TaskBuildDotNet" xml:space="preserve"><value>.NET 작업 공간 빌드</value></data>
+  <data name="Codex" xml:space="preserve"><value>Codex</value></data>
+  <data name="UseCodex" xml:space="preserve"><value>Codex 사용</value></data>
+  <data name="CodexReady" xml:space="preserve"><value>준비됨 (ChatGPT)</value></data>
+  <data name="CodexNotChecked" xml:space="preserve"><value>확인 안 됨</value></data>
+  <data name="CodexUnavailable" xml:space="preserve"><value>사용 불가</value></data>
+  <data name="TaskAgentWork" xml:space="preserve"><value>Codex로 목표 실행</value></data>
+  <data name="TaskInspectGitChanges" xml:space="preserve"><value>Git 변경 사항 검사</value></data>
 </root>
