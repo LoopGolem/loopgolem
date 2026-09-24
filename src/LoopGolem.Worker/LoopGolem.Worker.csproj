@@ -5,6 +5,7 @@
     <AssemblyName>loopgolem-worker</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
     <ProjectReference Include="..\LoopGolem.Core\LoopGolem.Core.csproj" />
     <ProjectReference Include="..\LoopGolem.Orchestrator\LoopGolem.Orchestrator.csproj" />
   </ItemGroup>

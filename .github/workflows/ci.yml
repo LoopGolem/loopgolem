@@ -15,10 +15,20 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - run: dotnet restore LoopGolem.sln
-      - run: dotnet build LoopGolem.sln --configuration Release --no-restore
+
+      - name: Restore
+        run: dotnet restore LoopGolem.sln
+
+      - name: Build
+        run: dotnet build LoopGolem.sln --configuration Release --no-restore
+
+      - name: Worker self-test
+        run: dotnet run --project src/LoopGolem.Worker/LoopGolem.Worker.csproj --configuration Release --no-build -- --self-test
