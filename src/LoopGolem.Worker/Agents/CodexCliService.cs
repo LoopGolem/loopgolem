@@ -626,6 +626,7 @@ public sealed class CodexCliService
         string workspacePath) =>
         [
             "exec",
+            "--skip-git-repo-check",
             "--ephemeral",
             "--ignore-user-config",
             "--disable", "apps",
