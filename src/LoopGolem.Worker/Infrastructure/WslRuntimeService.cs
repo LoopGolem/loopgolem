@@ -101,36 +101,33 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
                 null);
     }
 
-    public async Task<string?> ResolveCodexPathAsync(
+    public Task<ProcessRunResult> RunLoginShellExecutableAsync(
         string distribution,
-        CancellationToken cancellationToken = default)
+        string executable,
+        IEnumerable<string> arguments,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default,
+        string? standardInput = null)
     {
-        const string resolver =
-            "if [ -x \"$HOME/.local/bin/codex\" ]; then " +
-            "printf '%s\\n' \"$HOME/.local/bin/codex\"; " +
-            "else command -v codex 2>/dev/null || true; fi";
-
-        var run = await RunAsync(
-            distribution,
-            ["sh", "-c", resolver],
-            ProbeTimeout,
-            cancellationToken);
-
-        if (run.TimedOut || run.ExitCode != 0)
+        // bash -lc receives the executable as $0 and the remaining arguments as
+        // positional parameters. This gives us the user's login-shell PATH while
+        // keeping every Codex argument out of the shell command string.
+        var linuxArguments = new List<string>
         {
-            return null;
-        }
+            "bash",
+            "-lc",
+            "exec \"$0\" \"$@\"",
+            executable
+        };
 
-        var path = run.StandardOutput
-            .Split(
-                ['\r', '\n'],
-                StringSplitOptions.RemoveEmptyEntries |
-                StringSplitOptions.TrimEntries)
-            .LastOrDefault();
+        linuxArguments.AddRange(arguments);
 
-        return string.IsNullOrWhiteSpace(path)
-            ? null
-            : path;
+        return RunAsync(
+            distribution,
+            linuxArguments,
+            timeout,
+            cancellationToken,
+            standardInput);
     }
 
     public Task<ProcessRunResult> RunAsync(

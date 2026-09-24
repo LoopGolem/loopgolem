@@ -31,7 +31,7 @@ Windows onboarding requirements:
 
 The Windows Codex CLI installation is not used for autonomous LoopGolem agent execution.
 
-LoopGolem resolves the WSL executable explicitly. It first checks `~/.local/bin/codex` (the official installer default) and then falls back to `command -v codex`. The resolved absolute Linux path is used for status checks and agent execution, so LoopGolem does not depend on the non-interactive WSL process inheriting a login-shell PATH.
+LoopGolem invokes Codex through `bash -lc` inside the selected WSL distribution so the same login-shell PATH used by an interactive Ubuntu terminal is available. Arguments are not concatenated into the shell command: LoopGolem passes the executable as `$0` and all remaining values as positional parameters, then executes `exec "$0" "$@"`. This preserves argument boundaries while still loading the user's login environment.
 
 ## Linux
 

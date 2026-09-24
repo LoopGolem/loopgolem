@@ -131,25 +131,15 @@ public sealed class CodexCliService
                 outputSchemaPath,
                 cancellationToken);
 
-            var codexPath = await _wsl.ResolveCodexPathAsync(
-                distribution,
-                cancellationToken);
-
-            if (string.IsNullOrWhiteSpace(codexPath))
-            {
-                return TaskExecutionResult.Failed(
-                    "Codex CLI is unavailable inside WSL.",
-                    $"LoopGolem could not resolve the Codex executable inside WSL distribution '{distribution}'.");
-            }
-
             var codexArguments = BuildCodexArguments(
                 wslWorkspace,
                 wslOutputSchema,
                 wslLastMessage);
 
-            run = await _wsl.RunAsync(
+            run = await _wsl.RunLoginShellExecutableAsync(
                 distribution,
-                [codexPath, .. codexArguments],
+                "codex",
+                codexArguments,
                 ExecutionTimeout,
                 cancellationToken,
                 BuildPrompt(mission));
@@ -320,29 +310,14 @@ public sealed class CodexCliService
         }
 
         var distro = distribution.Distribution;
-        var codexPath = await _wsl.ResolveCodexPathAsync(
-            distro,
-            cancellationToken);
-
-        if (string.IsNullOrWhiteSpace(codexPath))
-        {
-            return new CodexRuntimeStatus(
-                false,
-                false,
-                null,
-                "Codex CLI is not installed or could not be resolved inside the selected WSL distribution.",
-                CodexRuntimeState.CodexCliMissing,
-                "wsl",
-                distro,
-                DefaultModel);
-        }
 
         ProcessRunResult version;
         try
         {
-            version = await _wsl.RunAsync(
+            version = await _wsl.RunLoginShellExecutableAsync(
                 distro,
-                [codexPath, "--version"],
+                "codex",
+                ["--version"],
                 StatusTimeout,
                 cancellationToken);
         }
@@ -372,9 +347,10 @@ public sealed class CodexCliService
                 DefaultModel);
         }
 
-        var login = await _wsl.RunAsync(
+        var login = await _wsl.RunLoginShellExecutableAsync(
             distro,
-            [codexPath, "login", "status"],
+            "codex",
+            ["login", "status"],
             StatusTimeout,
             cancellationToken);
 
