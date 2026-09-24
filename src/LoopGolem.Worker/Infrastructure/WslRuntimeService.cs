@@ -123,7 +123,7 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
 
         var path = run.StandardOutput
             .Split(
-                ['\\r', '\\n'],
+                ['\r', '\n'],
                 StringSplitOptions.RemoveEmptyEntries |
                 StringSplitOptions.TrimEntries)
             .LastOrDefault();
