@@ -20,6 +20,27 @@ internal static class SelfTest
 
         try
         {
+            if (!WslRuntimeService.TryConvertDrivePathToWsl(
+                    @"C:\Users\Pedro Test\AppData\Local\Temp\LoopGolem\smoke",
+                    out var convertedPath) ||
+                convertedPath !=
+                    "/mnt/c/Users/Pedro Test/AppData/Local/Temp/LoopGolem/smoke")
+            {
+                Console.Error.WriteLine(
+                    "LoopGolem worker self-test failed Windows-to-WSL path conversion.");
+                return 1;
+            }
+
+            if (!WslRuntimeService.TryConvertDrivePathToWsl(
+                    @"\\?\D:\Projects\LoopGolem",
+                    out var extendedPath) ||
+                extendedPath != "/mnt/d/Projects/LoopGolem")
+            {
+                Console.Error.WriteLine(
+                    "LoopGolem worker self-test failed extended Windows path conversion.");
+                return 1;
+            }
+
             Directory.CreateDirectory(Path.Combine(workspace, "nested"));
             await File.WriteAllTextAsync(Path.Combine(workspace, "alpha.txt"), "alpha");
             await File.WriteAllTextAsync(

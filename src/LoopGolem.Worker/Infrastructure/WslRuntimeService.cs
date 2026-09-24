@@ -168,9 +168,15 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
         string windowsPath,
         CancellationToken cancellationToken = default)
     {
-        var run = await RunAsync(
+        if (TryConvertDrivePathToWsl(windowsPath, out var directPath))
+        {
+            return directPath;
+        }
+
+        var run = await RunLoginShellExecutableAsync(
             distribution,
-            ["wslpath", "-a", "-u", windowsPath],
+            "wslpath",
+            ["-a", "-u", windowsPath],
             ProbeTimeout,
             cancellationToken);
 
@@ -192,6 +198,39 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
         }
 
         return path;
+    }
+
+    internal static bool TryConvertDrivePathToWsl(
+        string windowsPath,
+        out string wslPath)
+    {
+        ArgumentNullException.ThrowIfNull(windowsPath);
+
+        var normalized = windowsPath.StartsWith(
+            @"\\?\",
+            StringComparison.Ordinal)
+            ? windowsPath[4..]
+            : windowsPath;
+
+        if (normalized.Length < 3 ||
+            !char.IsAsciiLetter(normalized[0]) ||
+            normalized[1] != ':' ||
+            (normalized[2] != '\\' && normalized[2] != '/'))
+        {
+            wslPath = string.Empty;
+            return false;
+        }
+
+        var drive = char.ToLowerInvariant(normalized[0]);
+        var remainder = normalized[2..]
+            .Replace('\\', '/')
+            .TrimStart('/');
+
+        wslPath = string.IsNullOrEmpty(remainder)
+            ? $"/mnt/{drive}/"
+            : $"/mnt/{drive}/{remainder}";
+
+        return true;
     }
 
     internal static IReadOnlyList<string> ParseDistributionList(
