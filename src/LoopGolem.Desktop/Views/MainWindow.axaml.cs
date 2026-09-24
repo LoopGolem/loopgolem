@@ -30,7 +30,6 @@ public partial class MainWindow : Window
         ApplyLocalizedText();
 
         BrowseButton.Click += BrowseButton_Click;
-        TestCodexButton.Click += TestCodexButton_Click;
         StartButton.Click += StartButton_Click;
         MissionGoalBox.TextChanged += (_, _) => UpdateStartButtonState();
 
@@ -63,7 +62,6 @@ public partial class MainWindow : Window
         CodexLabel.Text = $"{LocalizationService.Get("Codex")}:";
         CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
         UseCodexCheckBox.Content = LocalizationService.Get("UseCodex");
-        TestCodexButton.Content = LocalizationService.Get("TestCodex");
         WorkspaceLabel.Text = LocalizationService.Get("Workspace");
         BrowseButton.Content = LocalizationService.Get("Browse");
         MissionGoalLabel.Text = LocalizationService.Get("MissionGoal");
@@ -101,7 +99,6 @@ public partial class MainWindow : Window
 
             WorkerStatusText.Text = LocalizationService.Get(
                 _workerConnected ? "Connected" : "Disconnected");
-            TestCodexButton.IsEnabled = _workerConnected;
 
             var unavailableText = LocalizationService.Get("WorkerUnavailable");
             if (!_workerConnected && string.IsNullOrWhiteSpace(MissionResultText.Text))
@@ -182,67 +179,6 @@ public partial class MainWindow : Window
         if (!_codexReady)
         {
             UseCodexCheckBox.IsChecked = false;
-        }
-    }
-
-    private async void TestCodexButton_Click(
-        object? sender,
-        RoutedEventArgs eventArgs)
-    {
-        if (!_workerConnected)
-        {
-            return;
-        }
-
-        TestCodexButton.IsEnabled = false;
-        UseCodexCheckBox.IsEnabled = false;
-        MissionResultText.Text = LocalizationService.Get("CodexSmokeRunning");
-
-        _workerHeartbeat.Stop();
-
-        try
-        {
-            var response = await _workerClient.RunCodexSmokeTestAsync();
-            var smoke = response.CodexSmokeTest;
-
-            if (!response.Success || smoke is null)
-            {
-                MissionResultText.Text =
-                    response.Error ?? LocalizationService.Get("CodexSmokeFailed");
-                return;
-            }
-
-            MissionResultText.Text =
-                $"{smoke.Summary}{Environment.NewLine}{Environment.NewLine}{smoke.Details}";
-
-            if (smoke.Success)
-            {
-                _codexReady = true;
-                _codexChecked = true;
-                CodexStatusText.Text = LocalizationService.Get("CodexReadyWsl");
-                UseCodexCheckBox.IsEnabled = true;
-                ToolTip.SetTip(CodexStatusText, smoke.Summary);
-            }
-            else
-            {
-                _codexReady = false;
-                UseCodexCheckBox.IsChecked = false;
-                UseCodexCheckBox.IsEnabled = false;
-                ToolTip.SetTip(CodexStatusText, smoke.Details);
-            }
-        }
-        catch (Exception exception)
-        {
-            _codexReady = false;
-            UseCodexCheckBox.IsChecked = false;
-            UseCodexCheckBox.IsEnabled = false;
-            MissionResultText.Text =
-                $"{LocalizationService.Get("CodexSmokeFailed")}{Environment.NewLine}{Environment.NewLine}{exception.Message}";
-        }
-        finally
-        {
-            TestCodexButton.IsEnabled = _workerConnected;
-            _workerHeartbeat.Start();
         }
     }
 

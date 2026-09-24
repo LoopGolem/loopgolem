@@ -74,9 +74,3 @@ After agent work, LoopGolem runs deterministic Git inspection and the available 
 
 The longer-term integration target can move to Codex app-server or the official SDK for richer streaming, lifecycle control, quota telemetry, permission handling and resumable sessions without changing mission semantics.
 
-
-## Integrated smoke test
-
-The Desktop exposes a **Test Codex** action even when the automatic status probe is not ready. The Worker reproduces the WSL login-shell probe, then creates a temporary Windows workspace and asks Codex (Luna, low reasoning, workspace-write, network disabled) to create one exact marker file. LoopGolem verifies the file from Windows and deletes the temporary workspace afterwards.
-
-This test intentionally consumes a small Codex execution. Its probe and execution stdout/stderr are shown in the Desktop result area so WSL/runtime failures can be diagnosed without external shell experiments.

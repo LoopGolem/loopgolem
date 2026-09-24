@@ -31,15 +31,9 @@ public sealed class CodexCliService
     private const string WindowsProbeCommand =
         "command -v codex; codex --version; codex login status";
 
-    private const string SmokeMarkerName =
-        "loopgolem-codex-smoke.txt";
-
-    private const string SmokeMarkerContent =
-        "LoopGolem Codex WSL smoke test succeeded.";
 
     private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan SmokeTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromMinutes(60);
 
     private static readonly JsonSerializerOptions JsonOptions =
@@ -60,149 +54,6 @@ public sealed class CodexCliService
         return OperatingSystem.IsWindows()
             ? await GetWindowsStatusAsync(cancellationToken)
             : await GetNativeStatusAsync(cancellationToken);
-    }
-
-    public async Task<CodexSmokeTestResult> RunSmokeTestAsync(
-        CancellationToken cancellationToken = default)
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return new CodexSmokeTestResult(
-                false,
-                "The integrated Codex smoke test currently targets the Windows + WSL runtime.",
-                "Run the native Codex status check on Linux.",
-                Model: DefaultModel);
-        }
-
-        var distribution = await _wsl.ResolveDistributionAsync(
-            cancellationToken);
-
-        if (!distribution.Success ||
-            string.IsNullOrWhiteSpace(distribution.Distribution))
-        {
-            return new CodexSmokeTestResult(
-                false,
-                "No usable WSL Linux distribution was found.",
-                distribution.Error ?? "WSL distribution resolution failed.",
-                Model: DefaultModel);
-        }
-
-        var distro = distribution.Distribution;
-        var probe = await _wsl.RunLoginShellCommandAsync(
-            distro,
-            WindowsProbeCommand,
-            StatusTimeout,
-            cancellationToken);
-
-        var probeText = JoinProcessText(probe);
-
-        if (probe.TimedOut ||
-            probe.ExitCode != 0 ||
-            !probeText.Contains(
-                "Logged in using ChatGPT",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return new CodexSmokeTestResult(
-                false,
-                "The WSL Codex probe did not confirm ChatGPT authentication.",
-                FormatDiagnostic("probe", probe),
-                distro,
-                ExtractVersion(probeText),
-                DefaultModel);
-        }
-
-        var root = Path.Combine(
-            Path.GetTempPath(),
-            "LoopGolem",
-            "codex-smoke",
-            Guid.NewGuid().ToString("N"));
-
-        Directory.CreateDirectory(root);
-
-        try
-        {
-            var wslRoot = await _wsl.ConvertWindowsPathAsync(
-                distro,
-                root,
-                cancellationToken);
-
-            var prompt =
-                $"Create a file named {SmokeMarkerName} in the current workspace " +
-                $"containing exactly: {SmokeMarkerContent} " +
-                "Do not create or modify any other file. " +
-                "When finished, respond concisely.";
-
-            var run = await _wsl.RunLoginShellExecutableAsync(
-                distro,
-                "codex",
-                BuildSmokeArguments(wslRoot),
-                SmokeTimeout,
-                cancellationToken,
-                prompt);
-
-            var markerPath = Path.Combine(root, SmokeMarkerName);
-            var markerExists = File.Exists(markerPath);
-            var markerText = markerExists
-                ? (await File.ReadAllTextAsync(
-                    markerPath,
-                    cancellationToken)).Trim()
-                : null;
-
-            var markerMatches = string.Equals(
-                markerText,
-                SmokeMarkerContent,
-                StringComparison.Ordinal);
-
-            var details = new StringBuilder()
-                .AppendLine($"Distribution: {distro}")
-                .AppendLine($"Model: {DefaultModel}")
-                .AppendLine($"Reasoning: {DefaultReasoningEffort}")
-                .AppendLine($"Marker created: {markerExists}")
-                .AppendLine($"Marker exact match: {markerMatches}")
-                .AppendLine()
-                .AppendLine(FormatDiagnostic("probe", probe))
-                .AppendLine()
-                .AppendLine(FormatDiagnostic("codex exec", run))
-                .ToString()
-                .Trim();
-
-            var success =
-                !run.TimedOut &&
-                run.ExitCode == 0 &&
-                markerMatches;
-
-            return new CodexSmokeTestResult(
-                success,
-                success
-                    ? "Codex WSL smoke test succeeded: the agent wrote a verified file through LoopGolem."
-                    : "Codex WSL smoke test failed: LoopGolem did not observe the expected verified file.",
-                details,
-                distro,
-                ExtractVersion(probeText),
-                DefaultModel);
-        }
-        catch (Exception exception) when (
-            exception is not OperationCanceledException)
-        {
-            return new CodexSmokeTestResult(
-                false,
-                "Codex WSL smoke test failed with an exception.",
-                exception.ToString(),
-                distro,
-                ExtractVersion(probeText),
-                DefaultModel);
-        }
-        finally
-        {
-            try
-            {
-                Directory.Delete(root, recursive: true);
-            }
-            catch
-            {
-                // Smoke-test cleanup must not hide the actual diagnostic result.
-            }
-        }
     }
 
     public async Task<TaskExecutionResult> ExecuteAsync(
@@ -619,26 +470,6 @@ public sealed class CodexCliService
             "--config", "sandbox_workspace_write.network_access=false",
             "--output-schema", outputSchemaPath,
             "--output-last-message", lastMessagePath,
-            "-"
-        ];
-
-    private static IReadOnlyList<string> BuildSmokeArguments(
-        string workspacePath) =>
-        [
-            "exec",
-            "--skip-git-repo-check",
-            "--ephemeral",
-            "--ignore-user-config",
-            "--disable", "apps",
-            "--disable", "plugins",
-            "--disable", "multi_agent",
-            "--color", "never",
-            "--sandbox", "workspace-write",
-            "--cd", workspacePath,
-            "--model", DefaultModel,
-            "--config", $"model_reasoning_effort=\"{DefaultReasoningEffort}\"",
-            "--config", "approval_policy=never",
-            "--config", "sandbox_workspace_write.network_access=false",
             "-"
         ];
 

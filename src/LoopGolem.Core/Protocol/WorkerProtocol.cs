@@ -7,7 +7,6 @@ public static class WorkerProtocol
     public const string PipeName = "loopgolem-worker-v1";
     public const string Ping = "ping";
     public const string GetCodexStatus = "getCodexStatus";
-    public const string RunCodexSmokeTest = "runCodexSmokeTest";
     public const string CreateMission = "createMission";
     public const string GetMission = "getMission";
 }
@@ -44,14 +43,6 @@ public sealed record CodexRuntimeStatus(
     string? Distribution = null,
     string? Model = null);
 
-public sealed record CodexSmokeTestResult(
-    bool Success,
-    string Summary,
-    string Details,
-    string? Distribution = null,
-    string? Version = null,
-    string? Model = null);
-
 public sealed record WorkerRequest(
     string Type,
     string? MissionId = null,
@@ -65,5 +56,4 @@ public sealed record WorkerResponse(
     string? ErrorCode = null,
     string? WorkerStatus = null,
     MissionSnapshot? Mission = null,
-    CodexRuntimeStatus? CodexStatus = null,
-    CodexSmokeTestResult? CodexSmokeTest = null);
+    CodexRuntimeStatus? CodexStatus = null);
