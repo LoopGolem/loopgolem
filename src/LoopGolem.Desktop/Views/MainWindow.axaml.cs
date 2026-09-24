@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
 using LoopGolem.Desktop.Ipc;
@@ -11,9 +12,11 @@ namespace LoopGolem.Desktop.Views;
 public partial class MainWindow : Window
 {
     private readonly WorkerPipeClient _workerClient = new();
+    private readonly DispatcherTimer _workerHeartbeat;
     private CancellationTokenSource? _missionPolling;
     private string? _workspacePath;
     private bool _workerConnected;
+    private bool _refreshingWorkerStatus;
 
     public MainWindow()
     {
@@ -26,8 +29,22 @@ public partial class MainWindow : Window
         StartButton.Click += StartButton_Click;
         MissionGoalBox.TextChanged += (_, _) => UpdateStartButtonState();
 
-        Opened += async (_, _) => await RefreshWorkerStatusAsync();
-        Closed += (_, _) => _missionPolling?.Cancel();
+        _workerHeartbeat = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _workerHeartbeat.Tick += async (_, _) => await RefreshWorkerStatusAsync();
+
+        Opened += async (_, _) =>
+        {
+            await RefreshWorkerStatusAsync();
+            _workerHeartbeat.Start();
+        };
+        Closed += (_, _) =>
+        {
+            _workerHeartbeat.Stop();
+            _missionPolling?.Cancel();
+        };
 
         UpdateStartButtonState();
     }
@@ -52,25 +69,48 @@ public partial class MainWindow : Window
 
     private async Task RefreshWorkerStatusAsync()
     {
+        if (_refreshingWorkerStatus)
+        {
+            return;
+        }
+
+        _refreshingWorkerStatus = true;
+
         try
         {
-            var response = await _workerClient.PingAsync();
-            _workerConnected = response.Success;
+            try
+            {
+                var response = await _workerClient.PingAsync();
+                _workerConnected = response.Success;
+            }
+            catch
+            {
+                _workerConnected = false;
+            }
+
+            WorkerStatusText.Text = LocalizationService.Get(
+                _workerConnected ? "Connected" : "Disconnected");
+
+            var unavailableText = LocalizationService.Get("WorkerUnavailable");
+            if (!_workerConnected && string.IsNullOrWhiteSpace(MissionResultText.Text))
+            {
+                MissionResultText.Text = unavailableText;
+            }
+            else if (_workerConnected &&
+                     string.Equals(
+                         MissionResultText.Text,
+                         unavailableText,
+                         StringComparison.Ordinal))
+            {
+                MissionResultText.Text = string.Empty;
+            }
+
+            UpdateStartButtonState();
         }
-        catch
+        finally
         {
-            _workerConnected = false;
+            _refreshingWorkerStatus = false;
         }
-
-        WorkerStatusText.Text = LocalizationService.Get(
-            _workerConnected ? "Connected" : "Disconnected");
-
-        if (!_workerConnected && string.IsNullOrWhiteSpace(MissionResultText.Text))
-        {
-            MissionResultText.Text = LocalizationService.Get("WorkerUnavailable");
-        }
-
-        UpdateStartButtonState();
     }
 
     private async void BrowseButton_Click(
