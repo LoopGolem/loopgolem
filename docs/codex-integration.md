@@ -1,20 +1,62 @@
 # Codex integration
 
-LoopGolem currently uses the official Codex CLI for bounded agent tasks.
+LoopGolem uses the official Codex CLI for bounded agent tasks.
 
 Agent work is allowed only when `codex login status` reports ChatGPT authentication. LoopGolem never asks for API keys, cookies or access tokens and does not silently fall back to paid API usage.
 
+## Windows: Codex runs inside WSL2
+
+Native Windows Codex sandboxing currently has edge cases around workspace-write. LoopGolem therefore runs Codex inside a user Linux distribution in WSL2 while keeping the Desktop, Worker, Git verification and .NET build on Windows.
+
+The workspace remains on the Windows filesystem. For example:
+
+```text
+C:\Projects\repo
+```
+
+is translated through `wslpath` and passed to Codex as a WSL path such as:
+
+```text
+/mnt/c/Projects/repo
+```
+
+LoopGolem ignores infrastructure-only distributions such as `docker-desktop`. Set `LOOPGOLEM_WSL_DISTRO` to explicitly choose a user distribution when more than one is installed.
+
+Windows onboarding requirements:
+
+1. Install a WSL2 Linux distribution, for example Ubuntu.
+2. Install the official Codex CLI inside that distribution.
+3. Run `codex` inside the distribution and choose **Sign in with ChatGPT**.
+4. Verify inside WSL with `codex login status`.
+
+The Windows Codex CLI installation is not used for autonomous LoopGolem agent execution.
+
+## Linux
+
+On Linux, LoopGolem invokes the native Codex CLI directly.
+
+## Model policy
+
+The initial autonomous worker policy is pinned explicitly to:
+
+```text
+model: gpt-6-luna
+reasoning effort: low
+```
+
+LoopGolem does not inherit the user's current Codex default model. This prevents an account-side default change from silently routing routine autonomous work to a more expensive model such as Astra.
+
+Future model routing will promote tasks to stronger reasoning/model tiers only through orchestrator policy.
+
 ## Permission model
 
-LoopGolem selects Codex's built-in `:workspace` permission profile through `default_permissions`. This is the current permission-profile path and replaces the legacy `--sandbox workspace-write` invocation.
-
-The built-in workspace profile permits writes inside the selected workspace while keeping network access restricted. LoopGolem also sets approval policy to `never` for unattended tasks and starts each task in an ephemeral Codex session.
+Codex runs with `workspace-write` sandboxing, network disabled, and approval policy `never` for unattended work. Apps, plugins and multi-agent mode are disabled for this bounded worker execution.
 
 Codex is instructed not to commit, push, create branches or rewrite Git history.
 
 ## Worktree safety
 
-Codex missions currently require a clean Git working tree before agent execution. This avoids mixing autonomous edits with unrelated local work and gives LoopGolem a deterministic postcondition.
+Codex missions require a clean Git working tree before agent execution. This avoids mixing autonomous edits with unrelated local work and gives LoopGolem a deterministic postcondition.
 
 Codex returns a structured outcome:
 

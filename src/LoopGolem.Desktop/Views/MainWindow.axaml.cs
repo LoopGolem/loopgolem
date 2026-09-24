@@ -130,16 +130,19 @@ public partial class MainWindow : Window
     private async Task RefreshCodexStatusAsync()
     {
         _codexChecked = true;
+        CodexRuntimeStatus? status = null;
 
         try
         {
             var response = await _workerClient.GetCodexStatusAsync();
+            status = response.CodexStatus;
             _codexReady =
                 response.Success &&
-                response.CodexStatus is
+                status is
                 {
                     Available: true,
-                    ChatGptAuthenticated: true
+                    ChatGptAuthenticated: true,
+                    State: CodexRuntimeState.Ready
                 };
         }
         catch
@@ -147,8 +150,30 @@ public partial class MainWindow : Window
             _codexReady = false;
         }
 
-        CodexStatusText.Text = LocalizationService.Get(
-            _codexReady ? "CodexReady" : "CodexUnavailable");
+        CodexStatusText.Text = status is null
+            ? LocalizationService.Get("CodexUnavailable")
+            : LocalizationService.Get(status.State switch
+            {
+                CodexRuntimeState.Ready when status.Runtime == "wsl" =>
+                    "CodexReadyWsl",
+                CodexRuntimeState.Ready =>
+                    "CodexReady",
+                CodexRuntimeState.WslDistributionMissing =>
+                    "CodexWslRequired",
+                CodexRuntimeState.CodexCliMissing when status.Runtime == "wsl" =>
+                    "CodexCliMissingWsl",
+                CodexRuntimeState.AuthenticationRequired when status.Runtime == "wsl" =>
+                    "CodexAuthRequiredWsl",
+                CodexRuntimeState.AuthenticationRequired =>
+                    "CodexAuthRequired",
+                _ =>
+                    "CodexUnavailable"
+            });
+
+        ToolTip.SetTip(
+            CodexStatusText,
+            status?.Message ?? LocalizationService.Get("CodexUnavailable"));
+
         UseCodexCheckBox.IsEnabled = _codexReady;
 
         if (!_codexReady)
@@ -250,7 +275,6 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            // Window closed or a new mission replaced the polling loop.
         }
 
         UpdateStartButtonState();

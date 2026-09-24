@@ -52,4 +52,9 @@
   <data name="CodexUnavailable" xml:space="preserve"><value>לא זמין</value></data>
   <data name="TaskAgentWork" xml:space="preserve"><value>ביצוע היעד עם Codex</value></data>
   <data name="TaskInspectGitChanges" xml:space="preserve"><value>בדיקת שינויי Git</value></data>
+  <data name="CodexReadyWsl" xml:space="preserve"><value>מוכן (ChatGPT · WSL)</value></data>
+  <data name="CodexWslRequired" xml:space="preserve"><value>נדרש WSL Linux</value></data>
+  <data name="CodexCliMissingWsl" xml:space="preserve"><value>יש להתקין Codex ב-WSL</value></data>
+  <data name="CodexAuthRequiredWsl" xml:space="preserve"><value>נדרשת התחברות ל-ChatGPT ב-WSL</value></data>
+  <data name="CodexAuthRequired" xml:space="preserve"><value>נדרשת התחברות ל-ChatGPT</value></data>
 </root>

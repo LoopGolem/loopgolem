@@ -24,11 +24,24 @@ public static class WorkerErrorCodes
     public const string InternalError = "internal_error";
 }
 
+public enum CodexRuntimeState
+{
+    Ready,
+    WslDistributionMissing,
+    CodexCliMissing,
+    AuthenticationRequired,
+    Unavailable
+}
+
 public sealed record CodexRuntimeStatus(
     bool Available,
     bool ChatGptAuthenticated,
     string? Version,
-    string Message);
+    string Message,
+    CodexRuntimeState State = CodexRuntimeState.Unavailable,
+    string Runtime = "native",
+    string? Distribution = null,
+    string? Model = null);
 
 public sealed record WorkerRequest(
     string Type,

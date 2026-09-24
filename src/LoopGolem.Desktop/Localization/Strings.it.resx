@@ -52,4 +52,9 @@
   <data name="CodexUnavailable" xml:space="preserve"><value>Non disponibile</value></data>
   <data name="TaskAgentWork" xml:space="preserve"><value>Esegui obiettivo con Codex</value></data>
   <data name="TaskInspectGitChanges" xml:space="preserve"><value>Ispeziona modifiche Git</value></data>
+  <data name="CodexReadyWsl" xml:space="preserve"><value>Pronto (ChatGPT · WSL)</value></data>
+  <data name="CodexWslRequired" xml:space="preserve"><value>WSL Linux richiesto</value></data>
+  <data name="CodexCliMissingWsl" xml:space="preserve"><value>Installa Codex in WSL</value></data>
+  <data name="CodexAuthRequiredWsl" xml:space="preserve"><value>Accesso ChatGPT richiesto in WSL</value></data>
+  <data name="CodexAuthRequired" xml:space="preserve"><value>Accesso ChatGPT richiesto</value></data>
 </root>

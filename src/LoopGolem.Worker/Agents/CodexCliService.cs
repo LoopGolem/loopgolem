@@ -16,65 +16,39 @@ public sealed record CodexExecutionDetails(
     ProcessRunResult Process,
     CodexAgentOutcome? Outcome,
     string GitStatusBefore,
-    string GitStatusAfter);
+    string GitStatusAfter,
+    string Runtime,
+    string? Distribution,
+    string Model,
+    string ReasoningEffort);
 
-public sealed class CodexCliService(ProcessRunner processRunner)
+public sealed class CodexCliService
 {
-    private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(10);
+    public const string DefaultModel = "gpt-6-luna";
+    public const string DefaultReasoningEffort = "low";
+
+    private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromMinutes(60);
 
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
 
+    private readonly ProcessRunner _processRunner;
+    private readonly WslRuntimeService _wsl;
+
+    public CodexCliService(ProcessRunner processRunner)
+    {
+        _processRunner = processRunner;
+        _wsl = new WslRuntimeService(processRunner);
+    }
+
     public async Task<CodexRuntimeStatus> GetStatusAsync(
         CancellationToken cancellationToken = default)
     {
-        try
-        {
-            var version = await processRunner.RunAsync(
-                "codex",
-                ["--version"],
-                Environment.CurrentDirectory,
-                StatusTimeout,
-                cancellationToken);
-
-            var login = await processRunner.RunAsync(
-                "codex",
-                ["login", "status"],
-                Environment.CurrentDirectory,
-                StatusTimeout,
-                cancellationToken);
-
-            var loginText = string.Join(
-                Environment.NewLine,
-                new[] { login.StandardOutput, login.StandardError }
-                    .Where(value => !string.IsNullOrWhiteSpace(value)));
-
-            var chatGpt =
-                login.ExitCode == 0 &&
-                loginText.Contains(
-                    "Logged in using ChatGPT",
-                    StringComparison.OrdinalIgnoreCase);
-
-            var versionText = version.StandardOutput.Trim();
-            if (string.IsNullOrWhiteSpace(versionText))
-            {
-                versionText = version.StandardError.Trim();
-            }
-
-            return new CodexRuntimeStatus(
-                Available: version.ExitCode == 0 && !version.TimedOut,
-                ChatGptAuthenticated: chatGpt,
-                Version: string.IsNullOrWhiteSpace(versionText) ? null : versionText,
-                Message: chatGpt
-                    ? "Codex CLI is authenticated with ChatGPT."
-                    : loginText.Trim());
-        }
-        catch (Exception exception)
-        {
-            return new CodexRuntimeStatus(false, false, null, exception.Message);
-        }
+        return OperatingSystem.IsWindows()
+            ? await GetWindowsStatusAsync(cancellationToken)
+            : await GetNativeStatusAsync(cancellationToken);
     }
 
     public async Task<TaskExecutionResult> ExecuteAsync(
@@ -86,7 +60,7 @@ public sealed class CodexCliService(ProcessRunner processRunner)
         if (!status.Available)
         {
             return TaskExecutionResult.Failed(
-                "Codex CLI is unavailable.",
+                "Codex runtime is unavailable.",
                 status.Message);
         }
 
@@ -94,7 +68,7 @@ public sealed class CodexCliService(ProcessRunner processRunner)
         {
             return TaskExecutionResult.Failed(
                 "Codex is not authenticated with ChatGPT.",
-                "LoopGolem refuses agent work unless Codex reports ChatGPT authentication.");
+                status.Message);
         }
 
         var gitStatusBefore = await GetGitStatusAsync(
@@ -134,27 +108,60 @@ public sealed class CodexCliService(ProcessRunner processRunner)
             OutputSchema,
             cancellationToken);
 
-        var args = new[]
-        {
-            "exec",
-            "--ephemeral",
-            "--ignore-user-config",
-            "--color", "never",
-            "--cd", mission.WorkspacePath,
-            "--config", "default_permissions=:workspace",
-            "--config", "approval_policy=never",
-            "--output-schema", outputSchemaPath,
-            "--output-last-message", lastMessagePath,
-            "-"
-        };
+        ProcessRunResult run;
+        string runtimeName;
+        string? distribution = null;
 
-        var run = await processRunner.RunAsync(
-            "codex",
-            args,
-            mission.WorkspacePath,
-            ExecutionTimeout,
-            cancellationToken,
-            BuildPrompt(mission));
+        if (OperatingSystem.IsWindows())
+        {
+            distribution = status.Distribution
+                ?? throw new InvalidOperationException(
+                    "The WSL distribution disappeared after the Codex status check.");
+
+            var wslWorkspace = await _wsl.ConvertWindowsPathAsync(
+                distribution,
+                mission.WorkspacePath,
+                cancellationToken);
+            var wslLastMessage = await _wsl.ConvertWindowsPathAsync(
+                distribution,
+                lastMessagePath,
+                cancellationToken);
+            var wslOutputSchema = await _wsl.ConvertWindowsPathAsync(
+                distribution,
+                outputSchemaPath,
+                cancellationToken);
+
+            var codexArguments = BuildCodexArguments(
+                wslWorkspace,
+                wslOutputSchema,
+                wslLastMessage);
+
+            run = await _wsl.RunAsync(
+                distribution,
+                ["codex", .. codexArguments],
+                ExecutionTimeout,
+                cancellationToken,
+                BuildPrompt(mission));
+
+            runtimeName = "wsl";
+        }
+        else
+        {
+            var codexArguments = BuildCodexArguments(
+                mission.WorkspacePath,
+                outputSchemaPath,
+                lastMessagePath);
+
+            run = await _processRunner.RunAsync(
+                "codex",
+                codexArguments,
+                mission.WorkspacePath,
+                ExecutionTimeout,
+                cancellationToken,
+                BuildPrompt(mission));
+
+            runtimeName = "native";
+        }
 
         var gitStatusAfter = await GetGitStatusAsync(
             mission.WorkspacePath,
@@ -190,7 +197,11 @@ public sealed class CodexCliService(ProcessRunner processRunner)
                 run,
                 outcome,
                 gitStatusBefore.Output,
-                gitStatusAfter.Output),
+                gitStatusAfter.Output,
+                runtimeName,
+                distribution,
+                DefaultModel,
+                DefaultReasoningEffort),
             JsonOptions);
 
         TryDelete(lastMessagePath);
@@ -276,11 +287,195 @@ public sealed class CodexCliService(ProcessRunner processRunner)
         }
     }
 
+    private async Task<CodexRuntimeStatus> GetWindowsStatusAsync(
+        CancellationToken cancellationToken)
+    {
+        var distribution = await _wsl.ResolveDistributionAsync(
+            cancellationToken);
+
+        if (!distribution.Success ||
+            string.IsNullOrWhiteSpace(distribution.Distribution))
+        {
+            return new CodexRuntimeStatus(
+                Available: false,
+                ChatGptAuthenticated: false,
+                Version: null,
+                Message: distribution.Error ??
+                    "No user WSL distribution is available.",
+                State: CodexRuntimeState.WslDistributionMissing,
+                Runtime: "wsl",
+                Distribution: null,
+                Model: DefaultModel);
+        }
+
+        var distro = distribution.Distribution;
+
+        ProcessRunResult version;
+        try
+        {
+            version = await _wsl.RunAsync(
+                distro,
+                ["codex", "--version"],
+                StatusTimeout,
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            return new CodexRuntimeStatus(
+                false,
+                false,
+                null,
+                exception.Message,
+                CodexRuntimeState.CodexCliMissing,
+                "wsl",
+                distro,
+                DefaultModel);
+        }
+
+        if (version.TimedOut || version.ExitCode != 0)
+        {
+            return new CodexRuntimeStatus(
+                false,
+                false,
+                null,
+                "Codex CLI is not installed or could not be started inside the selected WSL distribution.",
+                CodexRuntimeState.CodexCliMissing,
+                "wsl",
+                distro,
+                DefaultModel);
+        }
+
+        var login = await _wsl.RunAsync(
+            distro,
+            ["codex", "login", "status"],
+            StatusTimeout,
+            cancellationToken);
+
+        var loginText = JoinProcessText(login);
+        var chatGpt = IsChatGptLogin(login, loginText);
+
+        var versionText = version.StandardOutput.Trim();
+        if (string.IsNullOrWhiteSpace(versionText))
+        {
+            versionText = version.StandardError.Trim();
+        }
+
+        return new CodexRuntimeStatus(
+            Available: true,
+            ChatGptAuthenticated: chatGpt,
+            Version: string.IsNullOrWhiteSpace(versionText)
+                ? null
+                : versionText,
+            Message: chatGpt
+                ? $"Codex is ready inside WSL distribution '{distro}' using ChatGPT authentication."
+                : "Codex CLI is installed in WSL but is not authenticated with ChatGPT. Run 'codex' inside that WSL distribution and choose Sign in with ChatGPT.",
+            State: chatGpt
+                ? CodexRuntimeState.Ready
+                : CodexRuntimeState.AuthenticationRequired,
+            Runtime: "wsl",
+            Distribution: distro,
+            Model: DefaultModel);
+    }
+
+    private async Task<CodexRuntimeStatus> GetNativeStatusAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var version = await _processRunner.RunAsync(
+                "codex",
+                ["--version"],
+                Environment.CurrentDirectory,
+                StatusTimeout,
+                cancellationToken);
+
+            if (version.TimedOut || version.ExitCode != 0)
+            {
+                return new CodexRuntimeStatus(
+                    false,
+                    false,
+                    null,
+                    "Codex CLI could not be started.",
+                    CodexRuntimeState.CodexCliMissing,
+                    "native",
+                    null,
+                    DefaultModel);
+            }
+
+            var login = await _processRunner.RunAsync(
+                "codex",
+                ["login", "status"],
+                Environment.CurrentDirectory,
+                StatusTimeout,
+                cancellationToken);
+
+            var loginText = JoinProcessText(login);
+            var chatGpt = IsChatGptLogin(login, loginText);
+
+            var versionText = version.StandardOutput.Trim();
+            if (string.IsNullOrWhiteSpace(versionText))
+            {
+                versionText = version.StandardError.Trim();
+            }
+
+            return new CodexRuntimeStatus(
+                Available: true,
+                ChatGptAuthenticated: chatGpt,
+                Version: string.IsNullOrWhiteSpace(versionText)
+                    ? null
+                    : versionText,
+                Message: chatGpt
+                    ? "Codex CLI is authenticated with ChatGPT."
+                    : loginText.Trim(),
+                State: chatGpt
+                    ? CodexRuntimeState.Ready
+                    : CodexRuntimeState.AuthenticationRequired,
+                Runtime: "native",
+                Distribution: null,
+                Model: DefaultModel);
+        }
+        catch (Exception exception)
+        {
+            return new CodexRuntimeStatus(
+                false,
+                false,
+                null,
+                exception.Message,
+                CodexRuntimeState.CodexCliMissing,
+                "native",
+                null,
+                DefaultModel);
+        }
+    }
+
+    private static IReadOnlyList<string> BuildCodexArguments(
+        string workspacePath,
+        string outputSchemaPath,
+        string lastMessagePath) =>
+        [
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--disable", "apps",
+            "--disable", "plugins",
+            "--disable", "multi_agent",
+            "--color", "never",
+            "--sandbox", "workspace-write",
+            "--cd", workspacePath,
+            "--model", DefaultModel,
+            "--config", $"model_reasoning_effort=\"{DefaultReasoningEffort}\"",
+            "--config", "approval_policy=never",
+            "--config", "sandbox_workspace_write.network_access=false",
+            "--output-schema", outputSchemaPath,
+            "--output-last-message", lastMessagePath,
+            "-"
+        ];
+
     private async Task<(bool Success, string Output, string Error)> GetGitStatusAsync(
         string workspacePath,
         CancellationToken cancellationToken)
     {
-        var run = await processRunner.RunAsync(
+        var run = await _processRunner.RunAsync(
             "git",
             ["status", "--porcelain=v1", "--untracked-files=all"],
             workspacePath,
@@ -304,6 +499,21 @@ public sealed class CodexCliService(ProcessRunner processRunner)
         return (true, run.StandardOutput.Trim(), string.Empty);
     }
 
+    private static string JoinProcessText(ProcessRunResult run) =>
+        string.Join(
+            Environment.NewLine,
+            new[] { run.StandardOutput, run.StandardError }
+                .Where(value => !string.IsNullOrWhiteSpace(value)));
+
+    private static bool IsChatGptLogin(
+        ProcessRunResult login,
+        string loginText) =>
+        login.ExitCode == 0 &&
+        !login.TimedOut &&
+        loginText.Contains(
+            "Logged in using ChatGPT",
+            StringComparison.OrdinalIgnoreCase);
+
     private static string BuildPrompt(Mission mission) =>
         $"""
         You are a coding worker executing one bounded LoopGolem mission.
@@ -316,7 +526,7 @@ public sealed class CodexCliService(ProcessRunner processRunner)
         - Inspect the repository and implement the goal directly in the working tree.
         - Do not commit, push, create branches, or rewrite Git history.
         - Do not modify unrelated files.
-        - Network access is disabled by the active LoopGolem permission profile.
+        - Network access is disabled by LoopGolem.
         - Run useful local checks when they help validate your changes.
         - If the goal is already satisfied, verify it and avoid unnecessary edits.
         - Do not ask the user questions during this task.

@@ -52,4 +52,9 @@
   <data name="CodexUnavailable" xml:space="preserve"><value>사용 불가</value></data>
   <data name="TaskAgentWork" xml:space="preserve"><value>Codex로 목표 실행</value></data>
   <data name="TaskInspectGitChanges" xml:space="preserve"><value>Git 변경 사항 검사</value></data>
+  <data name="CodexReadyWsl" xml:space="preserve"><value>준비됨 (ChatGPT · WSL)</value></data>
+  <data name="CodexWslRequired" xml:space="preserve"><value>WSL Linux 필요</value></data>
+  <data name="CodexCliMissingWsl" xml:space="preserve"><value>WSL에 Codex 설치 필요</value></data>
+  <data name="CodexAuthRequiredWsl" xml:space="preserve"><value>WSL에서 ChatGPT 로그인 필요</value></data>
+  <data name="CodexAuthRequired" xml:space="preserve"><value>ChatGPT 로그인 필요</value></data>
 </root>
