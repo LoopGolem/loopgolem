@@ -3,7 +3,7 @@ using LoopGolem.Orchestrator;
 
 namespace LoopGolem.Worker.Execution;
 
-public sealed class WorkspaceInspectionExecutor : IMissionTaskExecutor
+public sealed class ProjectDiscoveryExecutor : IMissionTaskExecutor
 {
     private static readonly HashSet<string> IgnoredDirectoryNames =
         new(StringComparer.OrdinalIgnoreCase)
@@ -14,7 +14,7 @@ public sealed class WorkspaceInspectionExecutor : IMissionTaskExecutor
             "obj"
         };
 
-    public MissionTaskKind Kind => MissionTaskKind.InspectWorkspace;
+    public MissionTaskKind Kind => MissionTaskKind.DiscoverProjects;
 
     public Task<string> ExecuteAsync(
         Mission mission,
@@ -27,10 +27,7 @@ public sealed class WorkspaceInspectionExecutor : IMissionTaskExecutor
                 $"Workspace '{mission.WorkspacePath}' does not exist.");
         }
 
-        long totalBytes = 0;
-        var fileCount = 0;
-        var directoryCount = 0;
-
+        var projectFiles = new List<string>();
         var pending = new Stack<string>();
         pending.Push(mission.WorkspacePath);
 
@@ -58,41 +55,39 @@ public sealed class WorkspaceInspectionExecutor : IMissionTaskExecutor
 
             foreach (var childDirectory in childDirectories)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
                 var name = Path.GetFileName(childDirectory);
-                if (IgnoredDirectoryNames.Contains(name))
+                if (!IgnoredDirectoryNames.Contains(name))
                 {
-                    continue;
+                    pending.Push(childDirectory);
                 }
-
-                directoryCount++;
-                pending.Push(childDirectory);
             }
 
             foreach (var file in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                fileCount++;
 
-                try
+                var extension = Path.GetExtension(file);
+                if (extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
+                    extension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase) ||
+                    extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase) ||
+                    extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
+                    extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
                 {
-                    totalBytes += new FileInfo(file).Length;
-                }
-                catch (IOException)
-                {
-                    // A file may disappear while the workspace is being inspected.
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    // Keep the inspection useful even if one file is unreadable.
+                    projectFiles.Add(
+                        Path.GetRelativePath(mission.WorkspacePath, file));
                 }
             }
         }
 
-        var sizeMiB = totalBytes / (1024d * 1024d);
+        projectFiles.Sort(StringComparer.OrdinalIgnoreCase);
+
+        if (projectFiles.Count == 0)
+        {
+            return Task.FromResult("No .NET solution or project files were found.");
+        }
+
         return Task.FromResult(
-            $"Workspace inspection complete: {fileCount} files, " +
-            $"{directoryCount} directories, {sizeMiB:F2} MiB.");
+            $"Found {projectFiles.Count} .NET solution/project files: " +
+            string.Join(", ", projectFiles));
     }
 }

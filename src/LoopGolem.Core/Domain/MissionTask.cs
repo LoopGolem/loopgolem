@@ -4,6 +4,7 @@ public sealed record MissionTask(
     string Id,
     string MissionId,
     int Sequence,
+    MissionTaskKind Kind,
     string Title,
     TaskStatus Status,
     string? Result,

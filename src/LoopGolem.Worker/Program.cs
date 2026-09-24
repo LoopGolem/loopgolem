@@ -12,9 +12,13 @@ if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
 var store = new SqliteMissionStore(AppPaths.GetDatabasePath());
 await store.InitializeAsync();
 
-var orchestrator = new MissionOrchestrator(
-    store,
-    new WorkspaceInspectionExecutor());
+IMissionTaskExecutor[] executors =
+[
+    new WorkspaceInspectionExecutor(),
+    new ProjectDiscoveryExecutor()
+];
+
+var orchestrator = new MissionOrchestrator(store, executors);
 
 using var shutdown = new CancellationTokenSource();
 

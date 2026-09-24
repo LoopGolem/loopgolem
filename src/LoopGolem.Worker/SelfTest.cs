@@ -24,26 +24,49 @@ internal static class SelfTest
             await File.WriteAllTextAsync(
                 Path.Combine(workspace, "nested", "beta.txt"),
                 "beta");
+            await File.WriteAllTextAsync(
+                Path.Combine(workspace, "Demo.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
 
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
-            var orchestrator = new MissionOrchestrator(
-                store,
-                new WorkspaceInspectionExecutor());
+            IMissionTaskExecutor[] executors =
+            [
+                new WorkspaceInspectionExecutor(),
+                new ProjectDiscoveryExecutor()
+            ];
+
+            var orchestrator = new MissionOrchestrator(store, executors);
 
             var created = await orchestrator.CreateMissionAsync(
                 "Inspect this workspace.",
                 workspace);
 
+            if (created.Tasks.Count != 2 ||
+                created.Tasks[0].Status != DomainTaskStatus.Ready ||
+                created.Tasks[1].Status != DomainTaskStatus.Planned)
+            {
+                Console.Error.WriteLine(
+                    "LoopGolem worker self-test failed while planning tasks.");
+                return 1;
+            }
+
             await orchestrator.RunMissionAsync(created.Mission.Id);
 
-            var completed = await store.GetAsync(created.Mission.Id);
+            // Re-open the store to prove the result came from durable state,
+            // not an object still held in memory.
+            var reopenedStore = new SqliteMissionStore(database);
+            await reopenedStore.InitializeAsync();
+            var completed = await reopenedStore.GetAsync(created.Mission.Id);
+
             if (completed is null ||
                 completed.Mission.Status != MissionStatus.Completed ||
-                completed.Task.Status != DomainTaskStatus.Completed ||
+                completed.Tasks.Count != 2 ||
+                completed.Tasks.Any(task => task.Status != DomainTaskStatus.Completed) ||
                 completed.Mission.Result is null ||
-                !completed.Mission.Result.Contains("2 files", StringComparison.Ordinal))
+                !completed.Tasks[0].Result!.Contains("3 files", StringComparison.Ordinal) ||
+                !completed.Tasks[1].Result!.Contains("Demo.csproj", StringComparison.Ordinal))
             {
                 Console.Error.WriteLine("LoopGolem worker self-test failed.");
                 return 1;

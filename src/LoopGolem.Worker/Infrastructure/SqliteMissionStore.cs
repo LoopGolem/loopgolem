@@ -18,40 +18,64 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         Directory.CreateDirectory(directory);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            PRAGMA foreign_keys = ON;
-            PRAGMA journal_mode = WAL;
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                PRAGMA foreign_keys = ON;
+                PRAGMA journal_mode = WAL;
 
-            CREATE TABLE IF NOT EXISTS missions (
-                id TEXT PRIMARY KEY,
-                goal TEXT NOT NULL,
-                workspace_path TEXT NOT NULL,
-                status TEXT NOT NULL,
-                result TEXT NULL,
-                error TEXT NULL,
-                created_utc TEXT NOT NULL,
-                updated_utc TEXT NOT NULL
-            );
+                CREATE TABLE IF NOT EXISTS missions (
+                    id TEXT PRIMARY KEY,
+                    goal TEXT NOT NULL,
+                    workspace_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT NULL,
+                    error TEXT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS mission_tasks (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                sequence INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                status TEXT NOT NULL,
-                result TEXT NULL,
-                error TEXT NULL,
-                created_utc TEXT NOT NULL,
-                updated_utc TEXT NOT NULL,
-                FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE
-            );
+                CREATE TABLE IF NOT EXISTS mission_tasks (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'InspectWorkspace',
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT NULL,
+                    error TEXT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE
+                );
 
-            CREATE INDEX IF NOT EXISTS ix_mission_tasks_mission_id
-                ON mission_tasks(mission_id);
+                CREATE INDEX IF NOT EXISTS ix_mission_tasks_mission_id
+                    ON mission_tasks(mission_id);
+                """;
+
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (!await HasColumnAsync(
+                connection,
+                "mission_tasks",
+                "kind",
+                cancellationToken))
+        {
+            await using var migration = connection.CreateCommand();
+            migration.CommandText = """
+                ALTER TABLE mission_tasks
+                ADD COLUMN kind TEXT NOT NULL DEFAULT 'InspectWorkspace';
+                """;
+            await migration.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var indexCommand = connection.CreateCommand();
+        indexCommand.CommandText = """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_mission_tasks_mission_sequence
+                ON mission_tasks(mission_id, sequence);
             """;
-
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        await indexCommand.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task CreateAsync(
@@ -75,18 +99,13 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             await missionCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var taskCommand = connection.CreateCommand())
+        foreach (var task in snapshot.Tasks.OrderBy(task => task.Sequence))
         {
-            taskCommand.Transaction = (SqliteTransaction)transaction;
-            taskCommand.CommandText = """
-                INSERT INTO mission_tasks (
-                    id, mission_id, sequence, title, status, result, error, created_utc, updated_utc)
-                VALUES (
-                    $id, $missionId, $sequence, $title, $status, $result, $error, $createdUtc, $updatedUtc);
-                """;
-
-            AddTaskParameters(taskCommand, snapshot.Task);
-            await taskCommand.ExecuteNonQueryAsync(cancellationToken);
+            await InsertTaskAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                task,
+                cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -160,23 +179,13 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             await missionCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var taskCommand = connection.CreateCommand())
+        foreach (var task in snapshot.Tasks.OrderBy(task => task.Sequence))
         {
-            taskCommand.Transaction = (SqliteTransaction)transaction;
-            taskCommand.CommandText = """
-                UPDATE mission_tasks SET
-                    sequence = $sequence,
-                    title = $title,
-                    status = $status,
-                    result = $result,
-                    error = $error,
-                    created_utc = $createdUtc,
-                    updated_utc = $updatedUtc
-                WHERE id = $id AND mission_id = $missionId;
-                """;
-
-            AddTaskParameters(taskCommand, snapshot.Task);
-            await taskCommand.ExecuteNonQueryAsync(cancellationToken);
+            await UpsertTaskAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                task,
+                cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -200,6 +209,77 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         await command.ExecuteNonQueryAsync(cancellationToken);
 
         return connection;
+    }
+
+    private static async Task<bool> HasColumnAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName});";
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(
+                    reader.GetString(1),
+                    columnName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task InsertTaskAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        MissionTask task,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO mission_tasks (
+                id, mission_id, sequence, kind, title, status, result, error, created_utc, updated_utc)
+            VALUES (
+                $id, $missionId, $sequence, $kind, $title, $status, $result, $error, $createdUtc, $updatedUtc);
+            """;
+
+        AddTaskParameters(command, task);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpsertTaskAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        MissionTask task,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO mission_tasks (
+                id, mission_id, sequence, kind, title, status, result, error, created_utc, updated_utc)
+            VALUES (
+                $id, $missionId, $sequence, $kind, $title, $status, $result, $error, $createdUtc, $updatedUtc)
+            ON CONFLICT(id) DO UPDATE SET
+                sequence = excluded.sequence,
+                kind = excluded.kind,
+                title = excluded.title,
+                status = excluded.status,
+                result = excluded.result,
+                error = excluded.error,
+                created_utc = excluded.created_utc,
+                updated_utc = excluded.updated_utc;
+            """;
+
+        AddTaskParameters(command, task);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task<MissionSnapshot?> ReadSnapshotAsync(
@@ -240,32 +320,37 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
 
         await using var taskCommand = connection.CreateCommand();
         taskCommand.CommandText = """
-            SELECT id, mission_id, sequence, title, status, result, error, created_utc, updated_utc
+            SELECT id, mission_id, sequence, kind, title, status, result, error, created_utc, updated_utc
             FROM mission_tasks
             WHERE mission_id = $missionId
-            ORDER BY sequence
-            LIMIT 1;
+            ORDER BY sequence;
             """;
         taskCommand.Parameters.AddWithValue("$missionId", missionId);
 
+        var tasks = new List<MissionTask>();
         await using var taskReader = await taskCommand.ExecuteReaderAsync(cancellationToken);
-        if (!await taskReader.ReadAsync(cancellationToken))
+
+        while (await taskReader.ReadAsync(cancellationToken))
         {
-            throw new InvalidDataException($"Mission '{missionId}' has no task.");
+            tasks.Add(new MissionTask(
+                taskReader.GetString(0),
+                taskReader.GetString(1),
+                taskReader.GetInt32(2),
+                Enum.Parse<MissionTaskKind>(taskReader.GetString(3)),
+                taskReader.GetString(4),
+                Enum.Parse<DomainTaskStatus>(taskReader.GetString(5)),
+                taskReader.IsDBNull(6) ? null : taskReader.GetString(6),
+                taskReader.IsDBNull(7) ? null : taskReader.GetString(7),
+                ParseTimestamp(taskReader.GetString(8)),
+                ParseTimestamp(taskReader.GetString(9))));
         }
 
-        var task = new MissionTask(
-            taskReader.GetString(0),
-            taskReader.GetString(1),
-            taskReader.GetInt32(2),
-            taskReader.GetString(3),
-            Enum.Parse<DomainTaskStatus>(taskReader.GetString(4)),
-            taskReader.IsDBNull(5) ? null : taskReader.GetString(5),
-            taskReader.IsDBNull(6) ? null : taskReader.GetString(6),
-            ParseTimestamp(taskReader.GetString(7)),
-            ParseTimestamp(taskReader.GetString(8)));
+        if (tasks.Count == 0)
+        {
+            throw new InvalidDataException($"Mission '{missionId}' has no tasks.");
+        }
 
-        return new MissionSnapshot(mission, task);
+        return new MissionSnapshot(mission, tasks);
     }
 
     private static void AddMissionParameters(
@@ -289,6 +374,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Parameters.AddWithValue("$id", task.Id);
         command.Parameters.AddWithValue("$missionId", task.MissionId);
         command.Parameters.AddWithValue("$sequence", task.Sequence);
+        command.Parameters.AddWithValue("$kind", task.Kind.ToString());
         command.Parameters.AddWithValue("$title", task.Title);
         command.Parameters.AddWithValue("$status", task.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)task.Result ?? DBNull.Value);
