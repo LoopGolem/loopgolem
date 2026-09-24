@@ -50,6 +50,11 @@ public sealed class CodexPlanningService(
             BuildPlannerPrompt(mission),
             cancellationToken);
 
+        DevelopmentDiagnostics.Write(
+            "planner.raw",
+            mission.Id,
+            run.FinalMessage);
+
         if (run.Process.TimedOut)
         {
             return TaskExecutionResult.Failed(
@@ -147,6 +152,11 @@ public sealed class CodexPlanningService(
             WorkerSchema,
             BuildWorkerPrompt(definition),
             cancellationToken);
+
+        DevelopmentDiagnostics.Write(
+            $"worker.raw:{definition.Id}",
+            mission.Id,
+            run.FinalMessage);
 
         if (run.Process.TimedOut)
         {
