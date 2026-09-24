@@ -34,9 +34,13 @@ public sealed class ProcessRunner
             RedirectStandardInput = standardInput is not null,
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
-            StandardInputEncoding = Encoding.UTF8,
             CreateNoWindow = true
         };
+
+        if (standardInput is not null)
+        {
+            startInfo.StandardInputEncoding = Encoding.UTF8;
+        }
 
         foreach (var argument in argumentList)
         {
