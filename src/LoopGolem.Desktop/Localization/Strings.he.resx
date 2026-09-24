@@ -19,4 +19,17 @@
   <data name="UpdateAvailable" xml:space="preserve"><value>גרסה חדשה של LoopGolem זמינה.</value></data>
   <data name="UpdateNow" xml:space="preserve"><value>עדכון</value></data>
   <data name="Later" xml:space="preserve"><value>מאוחר יותר</value></data>
+  <data name="Worker" xml:space="preserve"><value>Worker</value></data>
+  <data name="Connected" xml:space="preserve"><value>מחובר</value></data>
+  <data name="Disconnected" xml:space="preserve"><value>מנותק</value></data>
+  <data name="MissionStatus" xml:space="preserve"><value>מצב המשימה</value></data>
+  <data name="MissionResult" xml:space="preserve"><value>תוצאת המשימה</value></data>
+  <data name="BrowseWorkspaceTitle" xml:space="preserve"><value>בחרו סביבת עבודה של LoopGolem</value></data>
+  <data name="Running" xml:space="preserve"><value>פועל</value></data>
+  <data name="Completed" xml:space="preserve"><value>הושלמה</value></data>
+  <data name="Failed" xml:space="preserve"><value>נכשלה</value></data>
+  <data name="Planning" xml:space="preserve"><value>בתכנון</value></data>
+  <data name="WaitingForApproval" xml:space="preserve"><value>ממתין לאישור</value></data>
+  <data name="Paused" xml:space="preserve"><value>מושהית</value></data>
+  <data name="WorkerUnavailable" xml:space="preserve"><value>ה-Worker אינו זמין. הפעילו את loopgolem-worker ונסו שוב.</value></data>
 </root>

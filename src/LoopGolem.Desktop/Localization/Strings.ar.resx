@@ -19,4 +19,17 @@
   <data name="UpdateAvailable" xml:space="preserve"><value>يتوفر إصدار جديد من LoopGolem.</value></data>
   <data name="UpdateNow" xml:space="preserve"><value>تحديث</value></data>
   <data name="Later" xml:space="preserve"><value>لاحقًا</value></data>
+  <data name="Worker" xml:space="preserve"><value>Worker</value></data>
+  <data name="Connected" xml:space="preserve"><value>متصل</value></data>
+  <data name="Disconnected" xml:space="preserve"><value>غير متصل</value></data>
+  <data name="MissionStatus" xml:space="preserve"><value>حالة المهمة</value></data>
+  <data name="MissionResult" xml:space="preserve"><value>نتيجة المهمة</value></data>
+  <data name="BrowseWorkspaceTitle" xml:space="preserve"><value>اختر مساحة عمل لـ LoopGolem</value></data>
+  <data name="Running" xml:space="preserve"><value>قيد التشغيل</value></data>
+  <data name="Completed" xml:space="preserve"><value>مكتملة</value></data>
+  <data name="Failed" xml:space="preserve"><value>فشلت</value></data>
+  <data name="Planning" xml:space="preserve"><value>قيد التخطيط</value></data>
+  <data name="WaitingForApproval" xml:space="preserve"><value>بانتظار الموافقة</value></data>
+  <data name="Paused" xml:space="preserve"><value>متوقفة مؤقتًا</value></data>
+  <data name="WorkerUnavailable" xml:space="preserve"><value>الـ Worker غير متاح. شغّل loopgolem-worker ثم حاول مجددًا.</value></data>
 </root>

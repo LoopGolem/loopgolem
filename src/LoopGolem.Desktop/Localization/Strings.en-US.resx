@@ -19,4 +19,17 @@
   <data name="UpdateAvailable" xml:space="preserve"><value>A new version of LoopGolem is available.</value></data>
   <data name="UpdateNow" xml:space="preserve"><value>Update</value></data>
   <data name="Later" xml:space="preserve"><value>Later</value></data>
+  <data name="Worker" xml:space="preserve"><value>Worker</value></data>
+  <data name="Connected" xml:space="preserve"><value>Connected</value></data>
+  <data name="Disconnected" xml:space="preserve"><value>Disconnected</value></data>
+  <data name="MissionStatus" xml:space="preserve"><value>Mission status</value></data>
+  <data name="MissionResult" xml:space="preserve"><value>Mission result</value></data>
+  <data name="BrowseWorkspaceTitle" xml:space="preserve"><value>Select a LoopGolem workspace</value></data>
+  <data name="Running" xml:space="preserve"><value>Running</value></data>
+  <data name="Completed" xml:space="preserve"><value>Completed</value></data>
+  <data name="Failed" xml:space="preserve"><value>Failed</value></data>
+  <data name="Planning" xml:space="preserve"><value>Planning</value></data>
+  <data name="WaitingForApproval" xml:space="preserve"><value>Waiting for approval</value></data>
+  <data name="Paused" xml:space="preserve"><value>Paused</value></data>
+  <data name="WorkerUnavailable" xml:space="preserve"><value>Worker unavailable. Start loopgolem-worker and try again.</value></data>
 </root>

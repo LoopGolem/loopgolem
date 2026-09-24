@@ -19,4 +19,17 @@
   <data name="UpdateAvailable" xml:space="preserve"><value>Uma nova versão do LoopGolem está disponível.</value></data>
   <data name="UpdateNow" xml:space="preserve"><value>Atualizar</value></data>
   <data name="Later" xml:space="preserve"><value>Depois</value></data>
+  <data name="Worker" xml:space="preserve"><value>Worker</value></data>
+  <data name="Connected" xml:space="preserve"><value>Conectado</value></data>
+  <data name="Disconnected" xml:space="preserve"><value>Desconectado</value></data>
+  <data name="MissionStatus" xml:space="preserve"><value>Status da missão</value></data>
+  <data name="MissionResult" xml:space="preserve"><value>Resultado da missão</value></data>
+  <data name="BrowseWorkspaceTitle" xml:space="preserve"><value>Selecione uma área de trabalho do LoopGolem</value></data>
+  <data name="Running" xml:space="preserve"><value>Executando</value></data>
+  <data name="Completed" xml:space="preserve"><value>Concluída</value></data>
+  <data name="Failed" xml:space="preserve"><value>Falhou</value></data>
+  <data name="Planning" xml:space="preserve"><value>Planejando</value></data>
+  <data name="WaitingForApproval" xml:space="preserve"><value>Aguardando aprovação</value></data>
+  <data name="Paused" xml:space="preserve"><value>Pausada</value></data>
+  <data name="WorkerUnavailable" xml:space="preserve"><value>Worker indisponível. Inicie o loopgolem-worker e tente novamente.</value></data>
 </root>

@@ -19,4 +19,17 @@
   <data name="UpdateAvailable" xml:space="preserve"><value>نسخه جدیدی از LoopGolem در دسترس است.</value></data>
   <data name="UpdateNow" xml:space="preserve"><value>به‌روزرسانی</value></data>
   <data name="Later" xml:space="preserve"><value>بعداً</value></data>
+  <data name="Worker" xml:space="preserve"><value>Worker</value></data>
+  <data name="Connected" xml:space="preserve"><value>متصل</value></data>
+  <data name="Disconnected" xml:space="preserve"><value>قطع</value></data>
+  <data name="MissionStatus" xml:space="preserve"><value>وضعیت ماموریت</value></data>
+  <data name="MissionResult" xml:space="preserve"><value>نتیجه ماموریت</value></data>
+  <data name="BrowseWorkspaceTitle" xml:space="preserve"><value>یک فضای کاری LoopGolem انتخاب کنید</value></data>
+  <data name="Running" xml:space="preserve"><value>در حال اجرا</value></data>
+  <data name="Completed" xml:space="preserve"><value>تکمیل شد</value></data>
+  <data name="Failed" xml:space="preserve"><value>ناموفق</value></data>
+  <data name="Planning" xml:space="preserve"><value>در حال برنامه‌ریزی</value></data>
+  <data name="WaitingForApproval" xml:space="preserve"><value>در انتظار تأیید</value></data>
+  <data name="Paused" xml:space="preserve"><value>متوقف</value></data>
+  <data name="WorkerUnavailable" xml:space="preserve"><value>Worker در دسترس نیست. loopgolem-worker را اجرا کنید و دوباره تلاش کنید.</value></data>
 </root>

@@ -2,29 +2,51 @@
     xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     x:Class="LoopGolem.Desktop.Views.MainWindow"
-    Width="900"
-    Height="620"
-    MinWidth="720"
-    MinHeight="520">
-  <Grid Margin="28" RowDefinitions="Auto,24,Auto,16,Auto,16,*,24,Auto">
+    Width="920"
+    Height="720"
+    MinWidth="760"
+    MinHeight="620">
+  <Grid Margin="28" RowDefinitions="Auto,18,Auto,18,Auto,16,Auto,12,*,18,Auto,12,Auto">
     <StackPanel Grid.Row="0" Spacing="4">
       <TextBlock x:Name="TitleText" FontSize="30" FontWeight="SemiBold" />
       <TextBlock x:Name="SubtitleText" Opacity="0.72" TextWrapping="Wrap" />
     </StackPanel>
-    <Grid Grid.Row="2" ColumnDefinitions="Auto,12,*,12,Auto">
+
+    <Grid Grid.Row="2" ColumnDefinitions="Auto,8,Auto">
+      <TextBlock x:Name="WorkerLabel" Grid.Column="0" FontWeight="SemiBold" />
+      <TextBlock x:Name="WorkerStatusText" Grid.Column="2" />
+    </Grid>
+
+    <Grid Grid.Row="4" ColumnDefinitions="Auto,12,*,12,Auto">
       <TextBlock x:Name="WorkspaceLabel" Grid.Column="0" VerticalAlignment="Center" />
       <TextBox x:Name="WorkspaceBox" Grid.Column="2" IsReadOnly="True" />
-      <Button x:Name="BrowseButton" Grid.Column="4" IsEnabled="False" />
+      <Button x:Name="BrowseButton" Grid.Column="4" />
     </Grid>
-    <TextBlock x:Name="MissionGoalLabel" Grid.Row="4" FontWeight="SemiBold" />
-    <TextBox x:Name="MissionGoalBox" Grid.Row="6" AcceptsReturn="True" TextWrapping="Wrap" VerticalContentAlignment="Top" />
-    <Grid Grid.Row="8" ColumnDefinitions="*,Auto,12,Auto">
+
+    <TextBlock x:Name="MissionGoalLabel" Grid.Row="6" FontWeight="SemiBold" />
+
+    <TextBox
+        x:Name="MissionGoalBox"
+        Grid.Row="8"
+        MinHeight="150"
+        AcceptsReturn="True"
+        TextWrapping="Wrap"
+        VerticalContentAlignment="Top" />
+
+    <Grid Grid.Row="10" ColumnDefinitions="*,Auto,12,Auto">
       <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-        <TextBlock x:Name="StatusLabel" FontWeight="SemiBold" />
-        <TextBlock x:Name="StatusValueText" />
+        <TextBlock x:Name="MissionStatusLabel" FontWeight="SemiBold" />
+        <TextBlock x:Name="MissionStatusValue" />
       </StackPanel>
       <Button x:Name="SettingsButton" Grid.Column="1" IsEnabled="False" />
-      <Button x:Name="StartButton" Grid.Column="3" IsEnabled="False" />
+      <Button x:Name="StartButton" Grid.Column="3" />
     </Grid>
+
+    <Border Grid.Row="12" Padding="12" BorderThickness="1" CornerRadius="6">
+      <StackPanel Spacing="6">
+        <TextBlock x:Name="MissionResultLabel" FontWeight="SemiBold" />
+        <TextBlock x:Name="MissionResultText" TextWrapping="Wrap" />
+      </StackPanel>
+    </Border>
   </Grid>
 </Window>
