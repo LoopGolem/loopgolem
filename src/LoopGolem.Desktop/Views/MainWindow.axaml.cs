@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using LoopGolem.Core.Domain;
+using LoopGolem.Core.Protocol;
 using LoopGolem.Desktop.Ipc;
 using LoopGolem.Desktop.Localization;
 
