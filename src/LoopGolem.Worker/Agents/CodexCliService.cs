@@ -1,18 +1,31 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
 using LoopGolem.Worker.Infrastructure;
 
 namespace LoopGolem.Worker.Agents;
 
+public sealed record CodexAgentOutcome(
+    [property: JsonPropertyName("outcome")] string Outcome,
+    [property: JsonPropertyName("summary")] string Summary,
+    [property: JsonPropertyName("checks")] IReadOnlyList<string> Checks,
+    [property: JsonPropertyName("blocker")] string Blocker);
+
 public sealed record CodexExecutionDetails(
     ProcessRunResult Process,
-    string? FinalMessage);
+    CodexAgentOutcome? Outcome,
+    string GitStatusBefore,
+    string GitStatusAfter);
 
 public sealed class CodexCliService(ProcessRunner processRunner)
 {
     private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromMinutes(60);
+
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
 
     public async Task<CodexRuntimeStatus> GetStatusAsync(
         CancellationToken cancellationToken = default)
@@ -84,6 +97,24 @@ public sealed class CodexCliService(ProcessRunner processRunner)
                 "LoopGolem refuses agent work unless Codex reports ChatGPT authentication.");
         }
 
+        var gitStatusBefore = await GetGitStatusAsync(
+            mission.WorkspacePath,
+            cancellationToken);
+
+        if (!gitStatusBefore.Success)
+        {
+            return TaskExecutionResult.Failed(
+                "Codex missions require a Git repository.",
+                gitStatusBefore.Error);
+        }
+
+        if (!string.IsNullOrWhiteSpace(gitStatusBefore.Output))
+        {
+            return TaskExecutionResult.Failed(
+                "Codex mission was not started because the working tree is not clean.",
+                "Commit, stash, or discard local changes before starting an autonomous Codex mission.");
+        }
+
         var runtimeDirectory = Path.Combine(
             Path.GetTempPath(),
             "LoopGolem",
@@ -93,7 +124,15 @@ public sealed class CodexCliService(ProcessRunner processRunner)
 
         var lastMessagePath = Path.Combine(
             runtimeDirectory,
-            $"{task.Id}.last-message.txt");
+            $"{task.Id}.last-message.json");
+        var outputSchemaPath = Path.Combine(
+            runtimeDirectory,
+            $"{task.Id}.output-schema.json");
+
+        await File.WriteAllTextAsync(
+            outputSchemaPath,
+            OutputSchema,
+            cancellationToken);
 
         var args = new[]
         {
@@ -101,10 +140,10 @@ public sealed class CodexCliService(ProcessRunner processRunner)
             "--ephemeral",
             "--ignore-user-config",
             "--color", "never",
-            "--sandbox", "workspace-write",
             "--cd", mission.WorkspacePath,
+            "--config", "default_permissions=:workspace",
             "--config", "approval_policy=never",
-            "--config", "sandbox_workspace_write.network_access=false",
+            "--output-schema", outputSchemaPath,
             "--output-last-message", lastMessagePath,
             "-"
         };
@@ -117,16 +156,45 @@ public sealed class CodexCliService(ProcessRunner processRunner)
             cancellationToken,
             BuildPrompt(mission));
 
-        string? finalMessage = null;
+        var gitStatusAfter = await GetGitStatusAsync(
+            mission.WorkspacePath,
+            cancellationToken);
+
+        CodexAgentOutcome? outcome = null;
+        string? outcomeError = null;
+
         if (File.Exists(lastMessagePath))
         {
-            finalMessage = (await File.ReadAllTextAsync(
+            var finalMessage = (await File.ReadAllTextAsync(
                 lastMessagePath,
                 cancellationToken)).Trim();
+
+            if (!string.IsNullOrWhiteSpace(finalMessage))
+            {
+                try
+                {
+                    outcome = JsonSerializer.Deserialize<CodexAgentOutcome>(
+                        finalMessage,
+                        JsonOptions);
+                }
+                catch (JsonException exception)
+                {
+                    outcomeError =
+                        $"Codex returned an invalid structured result: {exception.Message}";
+                }
+            }
         }
 
         var details = JsonSerializer.Serialize(
-            new CodexExecutionDetails(run, finalMessage));
+            new CodexExecutionDetails(
+                run,
+                outcome,
+                gitStatusBefore.Output,
+                gitStatusAfter.Output),
+            JsonOptions);
+
+        TryDelete(lastMessagePath);
+        TryDelete(outputSchemaPath);
 
         if (run.TimedOut)
         {
@@ -148,11 +216,92 @@ public sealed class CodexCliService(ProcessRunner processRunner)
                 details);
         }
 
-        return TaskExecutionResult.Succeeded(
-            string.IsNullOrWhiteSpace(finalMessage)
-                ? "Codex completed the requested work."
-                : finalMessage,
-            details);
+        if (!gitStatusAfter.Success)
+        {
+            return TaskExecutionResult.Failed(
+                "Codex completed, but LoopGolem could not verify the Git working tree.",
+                gitStatusAfter.Error,
+                details);
+        }
+
+        if (outcome is null)
+        {
+            return TaskExecutionResult.Failed(
+                "Codex did not return a valid LoopGolem outcome.",
+                outcomeError ?? "The structured final response was empty or missing.",
+                details);
+        }
+
+        switch (outcome.Outcome)
+        {
+            case "blocked":
+                return TaskExecutionResult.Failed(
+                    outcome.Summary,
+                    string.IsNullOrWhiteSpace(outcome.Blocker)
+                        ? "Codex reported that it was blocked."
+                        : outcome.Blocker,
+                    details);
+
+            case "changed":
+                if (string.IsNullOrWhiteSpace(gitStatusAfter.Output))
+                {
+                    return TaskExecutionResult.Failed(
+                        "Codex reported changes, but Git detected no working-tree changes.",
+                        "LoopGolem will not accept an agent task as successful without deterministic evidence of the requested edit.",
+                        details);
+                }
+
+                return TaskExecutionResult.Succeeded(
+                    outcome.Summary,
+                    details);
+
+            case "already_satisfied":
+                if (!string.IsNullOrWhiteSpace(gitStatusAfter.Output))
+                {
+                    return TaskExecutionResult.Failed(
+                        "Codex reported that the goal was already satisfied, but Git detected changes.",
+                        "The agent result and deterministic Git state disagree.",
+                        details);
+                }
+
+                return TaskExecutionResult.Succeeded(
+                    outcome.Summary,
+                    details);
+
+            default:
+                return TaskExecutionResult.Failed(
+                    "Codex returned an unsupported outcome.",
+                    $"Unknown outcome '{outcome.Outcome}'.",
+                    details);
+        }
+    }
+
+    private async Task<(bool Success, string Output, string Error)> GetGitStatusAsync(
+        string workspacePath,
+        CancellationToken cancellationToken)
+    {
+        var run = await processRunner.RunAsync(
+            "git",
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+            workspacePath,
+            GitTimeout,
+            cancellationToken);
+
+        if (run.TimedOut)
+        {
+            return (false, string.Empty, "git status timed out.");
+        }
+
+        if (run.ExitCode != 0)
+        {
+            var error = string.IsNullOrWhiteSpace(run.StandardError)
+                ? run.StandardOutput
+                : run.StandardError;
+
+            return (false, string.Empty, error.Trim());
+        }
+
+        return (true, run.StandardOutput.Trim(), string.Empty);
     }
 
     private static string BuildPrompt(Mission mission) =>
@@ -167,10 +316,57 @@ public sealed class CodexCliService(ProcessRunner processRunner)
         - Inspect the repository and implement the goal directly in the working tree.
         - Do not commit, push, create branches, or rewrite Git history.
         - Do not modify unrelated files.
-        - Network access is disabled.
+        - Network access is disabled by the active LoopGolem permission profile.
         - Run useful local checks when they help validate your changes.
         - If the goal is already satisfied, verify it and avoid unnecessary edits.
         - Do not ask the user questions during this task.
-        - End with a concise summary of changes and checks performed.
+        - Report outcome "changed" only if you actually changed the working tree.
+        - Report outcome "already_satisfied" only if no edit was required.
+        - Report outcome "blocked" if permissions, missing tools, or another blocker prevented completion.
+        - Keep the summary concise and list the checks you actually performed.
+        """;
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private const string OutputSchema =
+        """
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": ["changed", "already_satisfied", "blocked"]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "blocker": {
+              "type": "string"
+            }
+          },
+          "required": ["outcome", "summary", "checks", "blocker"],
+          "additionalProperties": false
+        }
         """;
 }
