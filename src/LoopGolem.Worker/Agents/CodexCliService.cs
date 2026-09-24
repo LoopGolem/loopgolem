@@ -103,7 +103,7 @@ public sealed class CodexCliService(ProcessRunner processRunner)
             "--color", "never",
             "--sandbox", "workspace-write",
             "--cd", mission.WorkspacePath,
-            "--config", "approval_policy="never"",
+            "--config", "approval_policy=never",
             "--config", "sandbox_workspace_write.network_access=false",
             "--output-last-message", lastMessagePath,
             "-"

@@ -58,8 +58,7 @@ public sealed class GitChangesExecutor(ProcessRunner processRunner)
         }
 
         var changed = status.StandardOutput.Split(
-            ['', '
-'],
+            Environment.NewLine,
             StringSplitOptions.RemoveEmptyEntries |
             StringSplitOptions.TrimEntries);
 
