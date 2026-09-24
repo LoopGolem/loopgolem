@@ -1,5 +1,6 @@
 using LoopGolem.Orchestrator;
 using LoopGolem.Worker;
+using LoopGolem.Worker.Agents;
 using LoopGolem.Worker.Execution;
 using LoopGolem.Worker.Infrastructure;
 using LoopGolem.Worker.Ipc;
@@ -13,11 +14,14 @@ var store = new SqliteMissionStore(AppPaths.GetDatabasePath());
 await store.InitializeAsync();
 
 var processRunner = new ProcessRunner();
+var codex = new CodexCliService(processRunner);
 
 IMissionTaskExecutor[] executors =
 [
     new WorkspaceInspectionExecutor(),
     new ProjectDiscoveryExecutor(),
+    new CodexAgentExecutor(codex),
+    new GitChangesExecutor(processRunner),
     new DotNetBuildExecutor(processRunner)
 ];
 
@@ -40,7 +44,7 @@ var recoveryTask = Task.Run(
     () => orchestrator.ResumePendingAsync(shutdown.Token),
     shutdown.Token);
 
-var server = new WorkerPipeServer(store, orchestrator);
+var server = new WorkerPipeServer(store, orchestrator, codex);
 
 try
 {

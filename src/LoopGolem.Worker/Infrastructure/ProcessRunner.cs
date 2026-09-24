@@ -18,7 +18,8 @@ public sealed class ProcessRunner
         IEnumerable<string> arguments,
         string workingDirectory,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? standardInput = null)
     {
         var argumentList = arguments.ToArray();
 
@@ -29,6 +30,7 @@ public sealed class ProcessRunner
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = standardInput is not null,
             CreateNoWindow = true
         };
 
@@ -49,6 +51,13 @@ public sealed class ProcessRunner
         {
             throw new InvalidOperationException(
                 $"Failed to start process '{fileName}'.");
+        }
+
+        if (standardInput is not null)
+        {
+            await process.StandardInput.WriteAsync(standardInput);
+            await process.StandardInput.FlushAsync();
+            process.StandardInput.Close();
         }
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync();

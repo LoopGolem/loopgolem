@@ -5,8 +5,8 @@ namespace LoopGolem.Core.Protocol;
 public static class WorkerProtocol
 {
     public const string PipeName = "loopgolem-worker-v1";
-
     public const string Ping = "ping";
+    public const string GetCodexStatus = "getCodexStatus";
     public const string CreateMission = "createMission";
     public const string GetMission = "getMission";
 }
@@ -24,15 +24,23 @@ public static class WorkerErrorCodes
     public const string InternalError = "internal_error";
 }
 
+public sealed record CodexRuntimeStatus(
+    bool Available,
+    bool ChatGptAuthenticated,
+    string? Version,
+    string Message);
+
 public sealed record WorkerRequest(
     string Type,
     string? MissionId = null,
     string? Goal = null,
-    string? WorkspacePath = null);
+    string? WorkspacePath = null,
+    MissionExecutionMode ExecutionMode = MissionExecutionMode.ValidateOnly);
 
 public sealed record WorkerResponse(
     bool Success,
     string? Error = null,
     string? ErrorCode = null,
     string? WorkerStatus = null,
-    MissionSnapshot? Mission = null);
+    MissionSnapshot? Mission = null,
+    CodexRuntimeStatus? CodexStatus = null);

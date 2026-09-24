@@ -4,6 +4,7 @@ public sealed record Mission(
     string Id,
     string Goal,
     string WorkspacePath,
+    MissionExecutionMode ExecutionMode,
     MissionStatus Status,
     string? Result,
     string? Error,

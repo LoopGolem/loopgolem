@@ -54,7 +54,8 @@ internal static class SelfTest
 
             var created = await orchestrator.CreateMissionAsync(
                 "Inspect and build this workspace.",
-                workspace);
+                workspace,
+                MissionExecutionMode.ValidateOnly);
 
             if (created.Tasks.Count != 3 ||
                 created.Tasks[0].Status != DomainTaskStatus.Ready ||
@@ -63,6 +64,27 @@ internal static class SelfTest
             {
                 Console.Error.WriteLine(
                     "LoopGolem worker self-test failed while planning tasks.");
+                return 1;
+            }
+
+            var codexPlan = await orchestrator.CreateMissionAsync(
+                "Make a tiny code change.",
+                workspace,
+                MissionExecutionMode.Codex);
+
+            var expectedCodexKinds = new[]
+            {
+                MissionTaskKind.InspectWorkspace,
+                MissionTaskKind.DiscoverProjects,
+                MissionTaskKind.AgentWork,
+                MissionTaskKind.InspectGitChanges,
+                MissionTaskKind.BuildDotNet
+            };
+
+            if (!codexPlan.Tasks.Select(task => task.Kind).SequenceEqual(expectedCodexKinds))
+            {
+                Console.Error.WriteLine(
+                    "LoopGolem worker self-test failed while planning a Codex mission.");
                 return 1;
             }
 

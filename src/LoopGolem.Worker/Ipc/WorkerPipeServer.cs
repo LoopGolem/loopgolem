@@ -7,7 +7,8 @@ namespace LoopGolem.Worker.Ipc;
 
 public sealed class WorkerPipeServer(
     IMissionStore store,
-    IMissionOrchestrator orchestrator)
+    IMissionOrchestrator orchestrator,
+    LoopGolem.Worker.Agents.CodexCliService codex)
 {
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
@@ -83,6 +84,11 @@ public sealed class WorkerPipeServer(
             case WorkerProtocol.Ping:
                 return new WorkerResponse(true, WorkerStatus: "ready");
 
+            case WorkerProtocol.GetCodexStatus:
+                return new WorkerResponse(
+                    true,
+                    CodexStatus: await codex.GetStatusAsync(cancellationToken));
+
             case WorkerProtocol.CreateMission:
             {
                 if (string.IsNullOrWhiteSpace(request.Goal))
@@ -103,6 +109,7 @@ public sealed class WorkerPipeServer(
                 var snapshot = await orchestrator.CreateMissionAsync(
                     request.Goal,
                     request.WorkspacePath,
+                    request.ExecutionMode,
                     cancellationToken);
 
                 _ = ExecuteMissionSafelyAsync(snapshot.Mission.Id);

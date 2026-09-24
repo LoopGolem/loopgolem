@@ -28,6 +28,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     id TEXT PRIMARY KEY,
                     goal TEXT NOT NULL,
                     workspace_path TEXT NOT NULL,
+                    execution_mode TEXT NOT NULL DEFAULT 'ValidateOnly',
                     status TEXT NOT NULL,
                     result TEXT NULL,
                     error TEXT NULL,
@@ -57,6 +58,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        await EnsureColumnAsync(
+            connection,
+            "missions",
+            "execution_mode",
+            "TEXT NOT NULL DEFAULT 'ValidateOnly'",
+            cancellationToken);
         await EnsureColumnAsync(
             connection,
             "mission_tasks",
@@ -90,9 +97,9 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             missionCommand.Transaction = (SqliteTransaction)transaction;
             missionCommand.CommandText = """
                 INSERT INTO missions (
-                    id, goal, workspace_path, status, result, error, created_utc, updated_utc)
+                    id, goal, workspace_path, execution_mode, status, result, error, created_utc, updated_utc)
                 VALUES (
-                    $id, $goal, $workspacePath, $status, $result, $error, $createdUtc, $updatedUtc);
+                    $id, $goal, $workspacePath, $executionMode, $status, $result, $error, $createdUtc, $updatedUtc);
                 """;
 
             AddMissionParameters(missionCommand, snapshot.Mission);
@@ -167,6 +174,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 UPDATE missions SET
                     goal = $goal,
                     workspace_path = $workspacePath,
+                    execution_mode = $executionMode,
                     status = $status,
                     result = $result,
                     error = $error,
@@ -319,7 +327,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         await using (var missionCommand = connection.CreateCommand())
         {
             missionCommand.CommandText = """
-                SELECT id, goal, workspace_path, status, result, error, created_utc, updated_utc
+                SELECT id, goal, workspace_path, execution_mode, status, result, error, created_utc, updated_utc
                 FROM missions
                 WHERE id = $id;
                 """;
@@ -332,11 +340,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     reader.GetString(0),
                     reader.GetString(1),
                     reader.GetString(2),
-                    Enum.Parse<MissionStatus>(reader.GetString(3)),
-                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    Enum.Parse<MissionExecutionMode>(reader.GetString(3)),
+                    Enum.Parse<MissionStatus>(reader.GetString(4)),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
-                    ParseTimestamp(reader.GetString(6)),
-                    ParseTimestamp(reader.GetString(7)));
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    ParseTimestamp(reader.GetString(7)),
+                    ParseTimestamp(reader.GetString(8)));
             }
         }
 
@@ -389,6 +398,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Parameters.AddWithValue("$id", mission.Id);
         command.Parameters.AddWithValue("$goal", mission.Goal);
         command.Parameters.AddWithValue("$workspacePath", mission.WorkspacePath);
+        command.Parameters.AddWithValue("$executionMode", mission.ExecutionMode.ToString());
         command.Parameters.AddWithValue("$status", mission.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)mission.Result ?? DBNull.Value);
         command.Parameters.AddWithValue("$error", (object?)mission.Error ?? DBNull.Value);
