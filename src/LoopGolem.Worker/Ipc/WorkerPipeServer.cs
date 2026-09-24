@@ -33,58 +33,115 @@ public sealed class WorkerPipeServer(
         Stream stream,
         CancellationToken cancellationToken)
     {
-        using var reader = new StreamReader(stream, leaveOpen: true);
-        using var writer = new StreamWriter(stream, leaveOpen: true)
+        var reader = new StreamReader(stream, leaveOpen: true);
+        var writer = new StreamWriter(stream, leaveOpen: true)
         {
             AutoFlush = true
         };
 
-        WorkerResponse response;
-
         try
         {
-            var line = await reader.ReadLineAsync(cancellationToken);
-            if (string.IsNullOrWhiteSpace(line))
+            string? line;
+            try
+            {
+                line = await reader.ReadLineAsync(cancellationToken);
+            }
+            catch (IOException)
+            {
+                // The client disconnected before sending a complete request.
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            WorkerResponse response;
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    response = Error(
+                        WorkerErrorCodes.EmptyRequest,
+                        "Empty request.");
+                }
+                else
+                {
+                    var request = JsonSerializer.Deserialize<WorkerRequest>(
+                        line,
+                        JsonOptions);
+
+                    response = request is null
+                        ? Error(
+                            WorkerErrorCodes.InvalidRequest,
+                            "Invalid request.")
+                        : await HandleRequestAsync(
+                            request,
+                            cancellationToken);
+                }
+            }
+            catch (JsonException exception)
             {
                 response = Error(
-                    WorkerErrorCodes.EmptyRequest,
-                    "Empty request.");
+                    WorkerErrorCodes.InvalidJson,
+                    $"Invalid JSON: {exception.Message}");
             }
-            else
+            catch (Exception exception)
+                when (exception is not OperationCanceledException)
             {
-                var request = JsonSerializer.Deserialize<WorkerRequest>(line, JsonOptions);
-                response = request is null
-                    ? Error(WorkerErrorCodes.InvalidRequest, "Invalid request.")
-                    : await HandleRequestAsync(request, cancellationToken);
+                response = Error(
+                    WorkerErrorCodes.InternalError,
+                    exception.Message);
             }
-        }
-        catch (JsonException exception)
-        {
-            response = Error(
-                WorkerErrorCodes.InvalidJson,
-                $"Invalid JSON: {exception.Message}");
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            response = Error(
-                WorkerErrorCodes.InternalError,
-                exception.Message);
-        }
 
+            await TryWriteResponseAsync(
+                writer,
+                response,
+                cancellationToken);
+        }
+        finally
+        {
+            SafeDispose(writer);
+            SafeDispose(reader);
+        }
+    }
+
+    private static async Task TryWriteResponseAsync(
+        StreamWriter writer,
+        WorkerResponse response,
+        CancellationToken cancellationToken)
+    {
         try
         {
             await writer.WriteLineAsync(
                 JsonSerializer.Serialize(response, JsonOptions));
+
+            await writer.FlushAsync(cancellationToken);
         }
         catch (IOException)
         {
-            // The client may time out, close the window, or otherwise disconnect
-            // before a slower request finishes. A broken response pipe is a normal
-            // transport condition and must not stop the Worker.
+            // A client can time out or close while a long-running request is
+            // still being processed. That is a normal transport disconnect.
         }
         catch (ObjectDisposedException)
         {
-            // The connection was disposed before the response could be written.
+            // The connection disappeared before the response could be flushed.
+        }
+    }
+
+    private static void SafeDispose(IDisposable disposable)
+    {
+        try
+        {
+            disposable.Dispose();
+        }
+        catch (IOException)
+        {
+            // StreamWriter.Dispose may flush and rediscover the broken pipe.
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 
