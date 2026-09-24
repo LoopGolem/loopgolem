@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="AppTitle" xml:space="preserve"><value>LoopGolem</value></data>
+  <data name="AppSubtitle" xml:space="preserve"><value>کار خودکار ماندگار، هر بار یک وظیفه.</value></data>
+  <data name="Workspace" xml:space="preserve"><value>فضای کاری</value></data>
+  <data name="Browse" xml:space="preserve"><value>مرور</value></data>
+  <data name="MissionGoal" xml:space="preserve"><value>هدف ماموریت</value></data>
+  <data name="MissionGoalHint" xml:space="preserve"><value>نتیجه‌ای را که می‌خواهید LoopGolem به آن برسد توضیح دهید.</value></data>
+  <data name="StartMission" xml:space="preserve"><value>شروع ماموریت</value></data>
+  <data name="Settings" xml:space="preserve"><value>تنظیمات</value></data>
+  <data name="Status" xml:space="preserve"><value>وضعیت</value></data>
+  <data name="Ready" xml:space="preserve"><value>آماده</value></data>
+  <data name="WaitingForQuota" xml:space="preserve"><value>در انتظار بازنشانی سهمیه</value></data>
+  <data name="CheckUpdates" xml:space="preserve"><value>بررسی خودکار به‌روزرسانی‌ها</value></data>
+  <data name="UpdateAvailable" xml:space="preserve"><value>نسخه جدیدی از LoopGolem در دسترس است.</value></data>
+  <data name="UpdateNow" xml:space="preserve"><value>به‌روزرسانی</value></data>
+  <data name="Later" xml:space="preserve"><value>بعداً</value></data>
+</root>

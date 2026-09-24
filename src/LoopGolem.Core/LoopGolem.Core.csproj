@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>LoopGolem.Core</RootNamespace>
+    <AssemblyName>LoopGolem.Core</AssemblyName>
+  </PropertyGroup>
+</Project>

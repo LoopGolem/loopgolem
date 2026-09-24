@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="AppTitle" xml:space="preserve"><value>LoopGolem</value></data>
+  <data name="AppSubtitle" xml:space="preserve"><value>永続的な自律作業を、一つずつ。</value></data>
+  <data name="Workspace" xml:space="preserve"><value>ワークスペース</value></data>
+  <data name="Browse" xml:space="preserve"><value>参照</value></data>
+  <data name="MissionGoal" xml:space="preserve"><value>ミッション目標</value></data>
+  <data name="MissionGoalHint" xml:space="preserve"><value>LoopGolem に達成してほしい結果を記述してください。</value></data>
+  <data name="StartMission" xml:space="preserve"><value>ミッション開始</value></data>
+  <data name="Settings" xml:space="preserve"><value>設定</value></data>
+  <data name="Status" xml:space="preserve"><value>状態</value></data>
+  <data name="Ready" xml:space="preserve"><value>準備完了</value></data>
+  <data name="WaitingForQuota" xml:space="preserve"><value>クォータのリセット待ち</value></data>
+  <data name="CheckUpdates" xml:space="preserve"><value>更新を自動的に確認</value></data>
+  <data name="UpdateAvailable" xml:space="preserve"><value>LoopGolem の新しいバージョンがあります。</value></data>
+  <data name="UpdateNow" xml:space="preserve"><value>更新</value></data>
+  <data name="Later" xml:space="preserve"><value>後で</value></data>
+</root>

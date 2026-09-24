@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>LoopGolem.Worker</RootNamespace>
+    <AssemblyName>loopgolem-worker</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LoopGolem.Core\LoopGolem.Core.csproj" />
+    <ProjectReference Include="..\LoopGolem.Orchestrator\LoopGolem.Orchestrator.csproj" />
+  </ItemGroup>
+</Project>

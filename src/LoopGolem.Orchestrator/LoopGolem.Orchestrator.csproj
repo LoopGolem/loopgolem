@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>LoopGolem.Orchestrator</RootNamespace>
+    <AssemblyName>LoopGolem.Orchestrator</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LoopGolem.Core\LoopGolem.Core.csproj" />
+  </ItemGroup>
+</Project>
