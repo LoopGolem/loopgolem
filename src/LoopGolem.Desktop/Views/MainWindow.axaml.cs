@@ -16,7 +16,7 @@ public partial class MainWindow : Window
         WorkspaceLabel.Text = LocalizationService.Get("Workspace");
         BrowseButton.Content = LocalizationService.Get("Browse");
         MissionGoalLabel.Text = LocalizationService.Get("MissionGoal");
-        MissionGoalBox.Watermark = LocalizationService.Get("MissionGoalHint");
+        MissionGoalBox.PlaceholderText = LocalizationService.Get("MissionGoalHint");
         StatusLabel.Text = $"{LocalizationService.Get("Status")}:";
         StatusValueText.Text = LocalizationService.Get("Ready");
         SettingsButton.Content = LocalizationService.Get("Settings");
