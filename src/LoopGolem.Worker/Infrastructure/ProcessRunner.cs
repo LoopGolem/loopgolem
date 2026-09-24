@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace LoopGolem.Worker.Infrastructure;
 
@@ -31,6 +32,9 @@ public sealed class ProcessRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = standardInput is not null,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            StandardInputEncoding = Encoding.UTF8,
             CreateNoWindow = true
         };
 
@@ -111,7 +115,6 @@ public sealed class ProcessRunner
         }
         catch (InvalidOperationException)
         {
-            // The process exited between the state check and Kill.
         }
     }
 }

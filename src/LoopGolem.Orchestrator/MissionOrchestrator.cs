@@ -1,3 +1,4 @@
+using System.Text.Json;
 using LoopGolem.Core.Domain;
 using DomainTaskStatus = LoopGolem.Core.Domain.TaskStatus;
 
@@ -5,6 +6,9 @@ namespace LoopGolem.Orchestrator;
 
 public sealed class MissionOrchestrator : IMissionOrchestrator
 {
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
+
     private readonly IMissionStore _store;
     private readonly IReadOnlyDictionary<MissionTaskKind, IMissionTaskExecutor> _executors;
     private readonly SemaphoreSlim _executionGate = new(1, 1);
@@ -36,8 +40,6 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
         var now = DateTimeOffset.UtcNow;
         var missionId = Guid.NewGuid().ToString("N");
-        var tasks = CreatePlan(missionId, executionMode, now);
-
         var snapshot = new MissionSnapshot(
             new Mission(
                 missionId,
@@ -49,8 +51,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 null,
                 now,
                 now),
-            tasks);
+            CreateInitialPlan(missionId, executionMode, now));
 
+        snapshot = UpdateReadyStates(snapshot, now);
         await _store.CreateAsync(snapshot, cancellationToken);
         return snapshot;
     }
@@ -76,14 +79,15 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                snapshot = UpdateReadyStates(snapshot, DateTimeOffset.UtcNow);
 
-                var currentTask = snapshot.Tasks
+                var incomplete = snapshot.Tasks
+                    .Where(task => task.Status != DomainTaskStatus.Completed)
                     .OrderBy(task => task.Sequence)
-                    .FirstOrDefault(task => task.Status != DomainTaskStatus.Completed);
+                    .ToArray();
 
-                if (currentTask is null)
+                if (incomplete.Length == 0)
                 {
-                    var completedAt = DateTimeOffset.UtcNow;
                     snapshot = snapshot with
                     {
                         Mission = snapshot.Mission with
@@ -91,23 +95,47 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                             Status = MissionStatus.Completed,
                             Result = BuildMissionResult(snapshot.Tasks),
                             Error = null,
-                            UpdatedAtUtc = completedAt
+                            UpdatedAtUtc = DateTimeOffset.UtcNow
                         }
                     };
                     await _store.UpdateAsync(snapshot, cancellationToken);
                     return snapshot;
                 }
 
-                if (!_executors.TryGetValue(currentTask.Kind, out var executor))
+                var failed = incomplete.FirstOrDefault(
+                    task => task.Status == DomainTaskStatus.Failed);
+                if (failed is not null)
                 {
                     return await MarkMissionFailedAsync(
                         snapshot,
-                        $"No executor is registered for task kind '{currentTask.Kind}'.",
+                        failed.Error ?? $"Task '{failed.Title}' failed.",
+                        cancellationToken);
+                }
+
+                var current = incomplete.FirstOrDefault(
+                    task => task.Status is
+                        DomainTaskStatus.Ready or
+                        DomainTaskStatus.Running or
+                        DomainTaskStatus.Retrying);
+
+                if (current is null)
+                {
+                    return await MarkMissionFailedAsync(
+                        snapshot,
+                        "No runnable task remains. The plan may contain unresolved dependencies.",
+                        cancellationToken);
+                }
+
+                if (!_executors.TryGetValue(current.Kind, out var executor))
+                {
+                    return await MarkMissionFailedAsync(
+                        snapshot,
+                        $"No executor is registered for task kind '{current.Kind}'.",
                         cancellationToken);
                 }
 
                 var startedAt = DateTimeOffset.UtcNow;
-                var runningTask = currentTask with
+                var running = current with
                 {
                     Status = DomainTaskStatus.Running,
                     Error = null,
@@ -119,106 +147,88 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     {
                         Mission = snapshot.Mission with
                         {
-                            Status = MissionStatus.Running,
+                            Status = current.Kind == MissionTaskKind.PlanMission
+                                ? MissionStatus.Planning
+                                : MissionStatus.Running,
                             Error = null,
                             UpdatedAtUtc = startedAt
                         }
                     },
-                    runningTask);
-
+                    running);
                 await _store.UpdateAsync(snapshot, cancellationToken);
 
-                try
+                var result = await executor.ExecuteAsync(
+                    snapshot.Mission,
+                    running,
+                    cancellationToken);
+
+                var finishedAt = DateTimeOffset.UtcNow;
+                if (!result.Success)
                 {
-                    var result = await executor.ExecuteAsync(
-                        snapshot.Mission,
-                        runningTask,
-                        cancellationToken);
-
-                    var finishedAt = DateTimeOffset.UtcNow;
-                    if (!result.Success)
+                    var failedTask = running with
                     {
-                        var failedTask = runningTask with
-                        {
-                            Status = DomainTaskStatus.Failed,
-                            Result = result.Summary,
-                            ResultDetails = result.Details,
-                            Error = result.Error ?? result.Summary,
-                            UpdatedAtUtc = finishedAt
-                        };
+                        Status = DomainTaskStatus.Failed,
+                        Result = result.Summary,
+                        ResultDetails = result.Details,
+                        Error = result.Error ?? result.Summary,
+                        UpdatedAtUtc = finishedAt
+                    };
 
-                        snapshot = ReplaceTask(
-                            snapshot with
-                            {
-                                Mission = snapshot.Mission with
-                                {
-                                    Status = MissionStatus.Failed,
-                                    Error = failedTask.Error,
-                                    UpdatedAtUtc = finishedAt
-                                }
-                            },
-                            failedTask);
-
-                        await _store.UpdateAsync(snapshot, cancellationToken);
-                        return snapshot;
-                    }
-
-                    snapshot = ReplaceTask(
-                        snapshot,
-                        runningTask with
-                        {
-                            Status = DomainTaskStatus.Completed,
-                            Result = result.Summary,
-                            ResultDetails = result.Details,
-                            Error = null,
-                            UpdatedAtUtc = finishedAt
-                        });
-
-                    var nextTask = snapshot.Tasks
-                        .OrderBy(task => task.Sequence)
-                        .FirstOrDefault(task => task.Status != DomainTaskStatus.Completed);
-
-                    if (nextTask is not null &&
-                        nextTask.Status == DomainTaskStatus.Planned)
-                    {
-                        snapshot = ReplaceTask(
-                            snapshot,
-                            nextTask with
-                            {
-                                Status = DomainTaskStatus.Ready,
-                                UpdatedAtUtc = finishedAt
-                            });
-                    }
-
+                    snapshot = ReplaceTask(snapshot, failedTask);
                     snapshot = snapshot with
                     {
                         Mission = snapshot.Mission with
                         {
-                            Status = MissionStatus.Running,
+                            Status = MissionStatus.Failed,
+                            Error = failedTask.Error,
                             UpdatedAtUtc = finishedAt
                         }
                     };
 
                     await _store.UpdateAsync(snapshot, cancellationToken);
+                    return snapshot;
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+
+                var completed = running with
                 {
-                    throw;
-                }
-                catch (Exception exception)
+                    Status = DomainTaskStatus.Completed,
+                    Result = result.Summary,
+                    ResultDetails = result.Details,
+                    Error = null,
+                    UpdatedAtUtc = finishedAt
+                };
+
+                snapshot = ReplaceTask(snapshot, completed);
+
+                if (completed.Kind == MissionTaskKind.PlanMission)
                 {
-                    return await MarkMissionFailedAsync(
-                        ReplaceTask(
+                    var expansion = ExpandPlannerResult(
+                        snapshot,
+                        completed,
+                        finishedAt);
+
+                    if (expansion.Error is not null)
+                    {
+                        return await MarkMissionFailedAsync(
                             snapshot,
-                            runningTask with
-                            {
-                                Status = DomainTaskStatus.Failed,
-                                Error = exception.Message,
-                                UpdatedAtUtc = DateTimeOffset.UtcNow
-                            }),
-                        exception.Message,
-                        cancellationToken);
+                            expansion.Error,
+                            cancellationToken);
+                    }
+
+                    snapshot = expansion.Snapshot!;
                 }
+
+                snapshot = UpdateReadyStates(snapshot, finishedAt);
+                snapshot = snapshot with
+                {
+                    Mission = snapshot.Mission with
+                    {
+                        Status = MissionStatus.Running,
+                        UpdatedAtUtc = finishedAt
+                    }
+                };
+
+                await _store.UpdateAsync(snapshot, cancellationToken);
             }
         }
         finally
@@ -238,37 +248,183 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         }
     }
 
-    private static IReadOnlyList<MissionTask> CreatePlan(
+    private static IReadOnlyList<MissionTask> CreateInitialPlan(
         string missionId,
         MissionExecutionMode executionMode,
         DateTimeOffset now)
     {
-        var plan = new List<(MissionTaskKind Kind, string Title)>
+        var steps = new List<(MissionTaskKind Kind, string Title, PlannedTask Definition)>
         {
-            (MissionTaskKind.InspectWorkspace, "Inspect workspace"),
-            (MissionTaskKind.DiscoverProjects, "Discover project files")
+            (MissionTaskKind.InspectWorkspace, "Inspect workspace",
+                InternalDefinition("inspect-workspace", [])),
+            (MissionTaskKind.DiscoverProjects, "Discover project files",
+                InternalDefinition("discover-projects", ["inspect-workspace"]))
         };
 
-        if (executionMode == MissionExecutionMode.Codex)
-        {
-            plan.Add((MissionTaskKind.AgentWork, "Execute goal with Codex"));
-            plan.Add((MissionTaskKind.InspectGitChanges, "Inspect Git changes"));
-        }
+        steps.Add(executionMode == MissionExecutionMode.Codex
+            ? (MissionTaskKind.PlanMission, "Plan mission",
+                InternalDefinition("plan-mission", ["discover-projects"]))
+            : (MissionTaskKind.BuildDotNet, "Build .NET workspace",
+                InternalDefinition("build-dotnet", ["discover-projects"])));
 
-        plan.Add((MissionTaskKind.BuildDotNet, "Build .NET workspace"));
-
-        return plan.Select((step, index) => new MissionTask(
+        return steps.Select((step, index) => new MissionTask(
             Guid.NewGuid().ToString("N"),
             missionId,
             index + 1,
             step.Kind,
             step.Title,
-            index == 0 ? DomainTaskStatus.Ready : DomainTaskStatus.Planned,
+            step.Definition,
+            DomainTaskStatus.Planned,
             null,
             null,
             null,
             now,
             now)).ToArray();
+    }
+
+    private static (MissionSnapshot? Snapshot, string? Error) ExpandPlannerResult(
+        MissionSnapshot snapshot,
+        MissionTask plannerTask,
+        DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(plannerTask.ResultDetails))
+        {
+            return (null, "Planner completed without a structured mission plan.");
+        }
+
+        MissionPlan? plan;
+        try
+        {
+            plan = JsonSerializer.Deserialize<MissionPlan>(
+                plannerTask.ResultDetails,
+                JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return (null, $"Planner returned invalid JSON: {exception.Message}");
+        }
+
+        if (plan is null)
+        {
+            return (null, "Planner returned an empty mission plan.");
+        }
+
+        var planError = MissionPlanValidator.Validate(plan);
+        if (planError is not null)
+        {
+            return (null, planError);
+        }
+
+        var tasks = snapshot.Tasks.ToList();
+        var sequence = tasks.Max(task => task.Sequence) + 1;
+
+        foreach (var definition in plan.Tasks)
+        {
+            tasks.Add(new MissionTask(
+                Guid.NewGuid().ToString("N"),
+                snapshot.Mission.Id,
+                sequence++,
+                definition.Executor == PlannedExecutorKinds.Deterministic
+                    ? MissionTaskKind.DeterministicWork
+                    : MissionTaskKind.AgentWork,
+                definition.Title,
+                definition,
+                DomainTaskStatus.Planned,
+                null,
+                null,
+                null,
+                now,
+                now));
+        }
+
+        var terminalDependencies = plan.Tasks.Count == 0
+            ? new[] { "plan-mission" }
+            : plan.Tasks.Select(task => task.Id).ToArray();
+
+        tasks.Add(new MissionTask(
+            Guid.NewGuid().ToString("N"),
+            snapshot.Mission.Id,
+            sequence++,
+            MissionTaskKind.InspectGitChanges,
+            "Inspect Git changes",
+            InternalDefinition("inspect-git", terminalDependencies),
+            DomainTaskStatus.Planned,
+            null,
+            null,
+            null,
+            now,
+            now));
+
+        tasks.Add(new MissionTask(
+            Guid.NewGuid().ToString("N"),
+            snapshot.Mission.Id,
+            sequence,
+            MissionTaskKind.BuildDotNet,
+            "Build .NET workspace",
+            InternalDefinition("build-dotnet", ["inspect-git"]),
+            DomainTaskStatus.Planned,
+            null,
+            null,
+            null,
+            now,
+            now));
+
+        return (snapshot with { Tasks = tasks.OrderBy(task => task.Sequence).ToArray() }, null);
+    }
+
+    private static MissionSnapshot UpdateReadyStates(
+        MissionSnapshot snapshot,
+        DateTimeOffset now)
+    {
+        var tasks = snapshot.Tasks.ToArray();
+        var changed = false;
+
+        for (var i = 0; i < tasks.Length; i++)
+        {
+            if (tasks[i].Status != DomainTaskStatus.Planned ||
+                !DependenciesSatisfied(tasks[i], tasks))
+            {
+                continue;
+            }
+
+            tasks[i] = tasks[i] with
+            {
+                Status = DomainTaskStatus.Ready,
+                UpdatedAtUtc = now
+            };
+            changed = true;
+        }
+
+        return changed ? snapshot with { Tasks = tasks } : snapshot;
+    }
+
+    private static bool DependenciesSatisfied(
+        MissionTask task,
+        IReadOnlyList<MissionTask> allTasks)
+    {
+        if (task.Definition is null)
+        {
+            return allTasks
+                .Where(other => other.Sequence < task.Sequence)
+                .All(other => other.Status == DomainTaskStatus.Completed);
+        }
+
+        foreach (var dependencyId in task.Definition.DependsOn)
+        {
+            var dependency = allTasks.FirstOrDefault(
+                candidate => string.Equals(
+                    candidate.Definition?.Id,
+                    dependencyId,
+                    StringComparison.Ordinal));
+
+            if (dependency is null ||
+                dependency.Status != DomainTaskStatus.Completed)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private async Task<MissionSnapshot> MarkMissionFailedAsync(
@@ -299,6 +455,29 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 .OrderBy(task => task.Sequence)
                 .ToArray()
         };
+
+    private static PlannedTask InternalDefinition(
+        string id,
+        IReadOnlyList<string> dependsOn) =>
+        new(
+            id,
+            id,
+            PlannedExecutorKinds.Internal,
+            string.Empty,
+            [],
+            [],
+            [],
+            dependsOn,
+            new DeterministicOperation(
+                DeterministicOperationKinds.None,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                [],
+                string.Empty,
+                60));
 
     private static string BuildMissionResult(IEnumerable<MissionTask> tasks) =>
         string.Join(

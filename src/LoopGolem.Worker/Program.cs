@@ -15,12 +15,15 @@ await store.InitializeAsync();
 
 var processRunner = new ProcessRunner();
 var codex = new CodexCliService(processRunner);
+var planning = new CodexPlanningService(processRunner, codex);
 
 IMissionTaskExecutor[] executors =
 [
     new WorkspaceInspectionExecutor(),
     new ProjectDiscoveryExecutor(),
-    new CodexAgentExecutor(codex),
+    new PlannerTaskExecutor(planning),
+    new DeterministicTaskExecutor(processRunner),
+    new MicroTaskAgentExecutor(planning),
     new GitChangesExecutor(processRunner),
     new DotNetBuildExecutor(processRunner)
 ];
@@ -52,7 +55,6 @@ try
 }
 catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
 {
-    // Normal shutdown.
 }
 
 try
@@ -61,7 +63,6 @@ try
 }
 catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
 {
-    // Normal shutdown.
 }
 
 return 0;
