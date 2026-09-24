@@ -12,10 +12,13 @@ if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
 var store = new SqliteMissionStore(AppPaths.GetDatabasePath());
 await store.InitializeAsync();
 
+var processRunner = new ProcessRunner();
+
 IMissionTaskExecutor[] executors =
 [
     new WorkspaceInspectionExecutor(),
-    new ProjectDiscoveryExecutor()
+    new ProjectDiscoveryExecutor(),
+    new DotNetBuildExecutor(processRunner)
 ];
 
 var orchestrator = new MissionOrchestrator(store, executors);

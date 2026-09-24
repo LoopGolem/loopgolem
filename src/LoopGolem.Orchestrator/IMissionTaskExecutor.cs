@@ -6,7 +6,7 @@ public interface IMissionTaskExecutor
 {
     MissionTaskKind Kind { get; }
 
-    Task<string> ExecuteAsync(
+    Task<TaskExecutionResult> ExecuteAsync(
         Mission mission,
         MissionTask task,
         CancellationToken cancellationToken = default);

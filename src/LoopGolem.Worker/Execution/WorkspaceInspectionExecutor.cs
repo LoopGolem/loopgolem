@@ -1,7 +1,13 @@
+using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Orchestrator;
 
 namespace LoopGolem.Worker.Execution;
+
+public sealed record WorkspaceInspectionData(
+    int FileCount,
+    int DirectoryCount,
+    long TotalBytes);
 
 public sealed class WorkspaceInspectionExecutor : IMissionTaskExecutor
 {
@@ -16,7 +22,7 @@ public sealed class WorkspaceInspectionExecutor : IMissionTaskExecutor
 
     public MissionTaskKind Kind => MissionTaskKind.InspectWorkspace;
 
-    public Task<string> ExecuteAsync(
+    public Task<TaskExecutionResult> ExecuteAsync(
         Mission mission,
         MissionTask task,
         CancellationToken cancellationToken = default)
@@ -91,8 +97,15 @@ public sealed class WorkspaceInspectionExecutor : IMissionTaskExecutor
         }
 
         var sizeMiB = totalBytes / (1024d * 1024d);
+        var data = new WorkspaceInspectionData(
+            fileCount,
+            directoryCount,
+            totalBytes);
+
         return Task.FromResult(
-            $"Workspace inspection complete: {fileCount} files, " +
-            $"{directoryCount} directories, {sizeMiB:F2} MiB.");
+            TaskExecutionResult.Succeeded(
+                $"Workspace inspection complete: {fileCount} files, " +
+                $"{directoryCount} directories, {sizeMiB:F2} MiB.",
+                JsonSerializer.Serialize(data)));
     }
 }

@@ -39,27 +39,26 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
         var tasks = new[]
         {
-            new MissionTask(
-                Guid.NewGuid().ToString("N"),
+            CreateTask(
                 missionId,
                 1,
                 MissionTaskKind.InspectWorkspace,
                 "Inspect workspace",
                 DomainTaskStatus.Ready,
-                null,
-                null,
-                now,
                 now),
-            new MissionTask(
-                Guid.NewGuid().ToString("N"),
+            CreateTask(
                 missionId,
                 2,
                 MissionTaskKind.DiscoverProjects,
                 "Discover project files",
                 DomainTaskStatus.Planned,
-                null,
-                null,
-                now,
+                now),
+            CreateTask(
+                missionId,
+                3,
+                MissionTaskKind.BuildDotNet,
+                "Build .NET workspace",
+                DomainTaskStatus.Planned,
                 now)
         };
 
@@ -126,25 +125,18 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
                 if (currentTask.Status == DomainTaskStatus.Failed)
                 {
-                    var failedAt = DateTimeOffset.UtcNow;
-                    snapshot = snapshot with
-                    {
-                        Mission = snapshot.Mission with
-                        {
-                            Status = MissionStatus.Failed,
-                            Error = currentTask.Error ?? "A mission task failed.",
-                            UpdatedAtUtc = failedAt
-                        }
-                    };
-
-                    await _store.UpdateAsync(snapshot, cancellationToken);
-                    return snapshot;
+                    return await MarkMissionFailedAsync(
+                        snapshot,
+                        currentTask.Error ?? "A mission task failed.",
+                        cancellationToken);
                 }
 
                 if (!_executors.TryGetValue(currentTask.Kind, out var executor))
                 {
-                    throw new InvalidOperationException(
-                        $"No executor is registered for task kind '{currentTask.Kind}'.");
+                    return await MarkMissionFailedAsync(
+                        snapshot,
+                        $"No executor is registered for task kind '{currentTask.Kind}'.",
+                        cancellationToken);
                 }
 
                 var startedAt = DateTimeOffset.UtcNow;
@@ -171,18 +163,47 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
                 try
                 {
-                    var result = await executor.ExecuteAsync(
+                    var executionResult = await executor.ExecuteAsync(
                         snapshot.Mission,
                         runningTask,
                         cancellationToken);
 
-                    var taskCompletedAt = DateTimeOffset.UtcNow;
+                    var finishedAt = DateTimeOffset.UtcNow;
+
+                    if (!executionResult.Success)
+                    {
+                        var failedTask = runningTask with
+                        {
+                            Status = DomainTaskStatus.Failed,
+                            Result = executionResult.Summary,
+                            ResultDetails = executionResult.Details,
+                            Error = executionResult.Error ?? executionResult.Summary,
+                            UpdatedAtUtc = finishedAt
+                        };
+
+                        snapshot = ReplaceTask(
+                            snapshot with
+                            {
+                                Mission = snapshot.Mission with
+                                {
+                                    Status = MissionStatus.Failed,
+                                    Error = failedTask.Error,
+                                    UpdatedAtUtc = finishedAt
+                                }
+                            },
+                            failedTask);
+
+                        await _store.UpdateAsync(snapshot, cancellationToken);
+                        return snapshot;
+                    }
+
                     var completedTask = runningTask with
                     {
                         Status = DomainTaskStatus.Completed,
-                        Result = result,
+                        Result = executionResult.Summary,
+                        ResultDetails = executionResult.Details,
                         Error = null,
-                        UpdatedAtUtc = taskCompletedAt
+                        UpdatedAtUtc = finishedAt
                     };
 
                     snapshot = ReplaceTask(snapshot, completedTask);
@@ -199,7 +220,7 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                             nextTask with
                             {
                                 Status = DomainTaskStatus.Ready,
-                                UpdatedAtUtc = taskCompletedAt
+                                UpdatedAtUtc = finishedAt
                             });
                     }
 
@@ -208,7 +229,7 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         Mission = snapshot.Mission with
                         {
                             Status = MissionStatus.Running,
-                            UpdatedAtUtc = taskCompletedAt
+                            UpdatedAtUtc = finishedAt
                         }
                     };
 
@@ -217,7 +238,7 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     // Persisted Running state is intentional. Startup recovery
-                    // safely re-runs deterministic tasks that were interrupted.
+                    // re-runs deterministic tasks that were interrupted.
                     throw;
                 }
                 catch (Exception exception)
@@ -264,6 +285,46 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             await RunMissionAsync(snapshot.Mission.Id, cancellationToken);
         }
     }
+
+    private async Task<MissionSnapshot> MarkMissionFailedAsync(
+        MissionSnapshot snapshot,
+        string error,
+        CancellationToken cancellationToken)
+    {
+        var failedAt = DateTimeOffset.UtcNow;
+        snapshot = snapshot with
+        {
+            Mission = snapshot.Mission with
+            {
+                Status = MissionStatus.Failed,
+                Error = error,
+                UpdatedAtUtc = failedAt
+            }
+        };
+
+        await _store.UpdateAsync(snapshot, cancellationToken);
+        return snapshot;
+    }
+
+    private static MissionTask CreateTask(
+        string missionId,
+        int sequence,
+        MissionTaskKind kind,
+        string title,
+        DomainTaskStatus status,
+        DateTimeOffset now) =>
+        new(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            sequence,
+            kind,
+            title,
+            status,
+            null,
+            null,
+            null,
+            now,
+            now);
 
     private static MissionSnapshot ReplaceTask(
         MissionSnapshot snapshot,

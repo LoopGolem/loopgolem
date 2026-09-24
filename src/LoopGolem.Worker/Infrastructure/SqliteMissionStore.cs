@@ -43,6 +43,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     title TEXT NOT NULL,
                     status TEXT NOT NULL,
                     result TEXT NULL,
+                    result_details TEXT NULL,
                     error TEXT NULL,
                     created_utc TEXT NOT NULL,
                     updated_utc TEXT NOT NULL,
@@ -56,19 +57,18 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        if (!await HasColumnAsync(
-                connection,
-                "mission_tasks",
-                "kind",
-                cancellationToken))
-        {
-            await using var migration = connection.CreateCommand();
-            migration.CommandText = """
-                ALTER TABLE mission_tasks
-                ADD COLUMN kind TEXT NOT NULL DEFAULT 'InspectWorkspace';
-                """;
-            await migration.ExecuteNonQueryAsync(cancellationToken);
-        }
+        await EnsureColumnAsync(
+            connection,
+            "mission_tasks",
+            "kind",
+            "TEXT NOT NULL DEFAULT 'InspectWorkspace'",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "mission_tasks",
+            "result_details",
+            "TEXT NULL",
+            cancellationToken);
 
         await using var indexCommand = connection.CreateCommand();
         indexCommand.CommandText = """
@@ -211,6 +211,28 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         return connection;
     }
 
+    private static async Task EnsureColumnAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        if (await HasColumnAsync(
+                connection,
+                tableName,
+                columnName,
+                cancellationToken))
+        {
+            return;
+        }
+
+        await using var migration = connection.CreateCommand();
+        migration.CommandText =
+            $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
+        await migration.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static async Task<bool> HasColumnAsync(
         SqliteConnection connection,
         string tableName,
@@ -245,9 +267,11 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, status, result, error, created_utc, updated_utc)
+                id, mission_id, sequence, kind, title, status,
+                result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $status, $result, $error, $createdUtc, $updatedUtc);
+                $id, $missionId, $sequence, $kind, $title, $status,
+                $result, $resultDetails, $error, $createdUtc, $updatedUtc);
             """;
 
         AddTaskParameters(command, task);
@@ -264,15 +288,18 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, status, result, error, created_utc, updated_utc)
+                id, mission_id, sequence, kind, title, status,
+                result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $status, $result, $error, $createdUtc, $updatedUtc)
+                $id, $missionId, $sequence, $kind, $title, $status,
+                $result, $resultDetails, $error, $createdUtc, $updatedUtc)
             ON CONFLICT(id) DO UPDATE SET
                 sequence = excluded.sequence,
                 kind = excluded.kind,
                 title = excluded.title,
                 status = excluded.status,
                 result = excluded.result,
+                result_details = excluded.result_details,
                 error = excluded.error,
                 created_utc = excluded.created_utc,
                 updated_utc = excluded.updated_utc;
@@ -320,7 +347,8 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
 
         await using var taskCommand = connection.CreateCommand();
         taskCommand.CommandText = """
-            SELECT id, mission_id, sequence, kind, title, status, result, error, created_utc, updated_utc
+            SELECT id, mission_id, sequence, kind, title, status,
+                   result, result_details, error, created_utc, updated_utc
             FROM mission_tasks
             WHERE mission_id = $missionId
             ORDER BY sequence;
@@ -341,8 +369,9 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 Enum.Parse<DomainTaskStatus>(taskReader.GetString(5)),
                 taskReader.IsDBNull(6) ? null : taskReader.GetString(6),
                 taskReader.IsDBNull(7) ? null : taskReader.GetString(7),
-                ParseTimestamp(taskReader.GetString(8)),
-                ParseTimestamp(taskReader.GetString(9))));
+                taskReader.IsDBNull(8) ? null : taskReader.GetString(8),
+                ParseTimestamp(taskReader.GetString(9)),
+                ParseTimestamp(taskReader.GetString(10))));
         }
 
         if (tasks.Count == 0)
@@ -378,6 +407,9 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Parameters.AddWithValue("$title", task.Title);
         command.Parameters.AddWithValue("$status", task.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)task.Result ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$resultDetails",
+            (object?)task.ResultDetails ?? DBNull.Value);
         command.Parameters.AddWithValue("$error", (object?)task.Error ?? DBNull.Value);
         command.Parameters.AddWithValue("$createdUtc", FormatTimestamp(task.CreatedAtUtc));
         command.Parameters.AddWithValue("$updatedUtc", FormatTimestamp(task.UpdatedAtUtc));

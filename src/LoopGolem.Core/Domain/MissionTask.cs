@@ -8,6 +8,7 @@ public sealed record MissionTask(
     string Title,
     TaskStatus Status,
     string? Result,
+    string? ResultDetails,
     string? Error,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc);

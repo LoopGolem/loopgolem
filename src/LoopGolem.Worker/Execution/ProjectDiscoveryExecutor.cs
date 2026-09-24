@@ -1,7 +1,11 @@
+using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Orchestrator;
 
 namespace LoopGolem.Worker.Execution;
+
+public sealed record ProjectDiscoveryData(
+    IReadOnlyList<string> ProjectFiles);
 
 public sealed class ProjectDiscoveryExecutor : IMissionTaskExecutor
 {
@@ -16,7 +20,7 @@ public sealed class ProjectDiscoveryExecutor : IMissionTaskExecutor
 
     public MissionTaskKind Kind => MissionTaskKind.DiscoverProjects;
 
-    public Task<string> ExecuteAsync(
+    public Task<TaskExecutionResult> ExecuteAsync(
         Mission mission,
         MissionTask task,
         CancellationToken cancellationToken = default)
@@ -80,14 +84,20 @@ public sealed class ProjectDiscoveryExecutor : IMissionTaskExecutor
         }
 
         projectFiles.Sort(StringComparer.OrdinalIgnoreCase);
+        var data = new ProjectDiscoveryData(projectFiles);
 
         if (projectFiles.Count == 0)
         {
-            return Task.FromResult("No .NET solution or project files were found.");
+            return Task.FromResult(
+                TaskExecutionResult.Succeeded(
+                    "No .NET solution or project files were found.",
+                    JsonSerializer.Serialize(data)));
         }
 
         return Task.FromResult(
-            $"Found {projectFiles.Count} .NET solution/project files: " +
-            string.Join(", ", projectFiles));
+            TaskExecutionResult.Succeeded(
+                $"Found {projectFiles.Count} .NET solution/project files: " +
+                string.Join(", ", projectFiles),
+                JsonSerializer.Serialize(data)));
     }
 }
