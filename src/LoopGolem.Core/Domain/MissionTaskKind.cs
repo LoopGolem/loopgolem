@@ -4,7 +4,10 @@ public enum MissionTaskKind
 {
     InspectWorkspace,
     DiscoverProjects,
+    PlanMission,
+    DeterministicWork,
     AgentWork,
+    ValidateMission,
     InspectGitChanges,
     BuildDotNet
 }

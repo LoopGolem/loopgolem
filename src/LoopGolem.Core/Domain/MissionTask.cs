@@ -6,6 +6,7 @@ public sealed record MissionTask(
     int Sequence,
     MissionTaskKind Kind,
     string Title,
+    PlannedTask? Definition,
     TaskStatus Status,
     string? Result,
     string? ResultDetails,

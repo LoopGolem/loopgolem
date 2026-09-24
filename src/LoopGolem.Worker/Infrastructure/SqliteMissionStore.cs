@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Orchestrator;
 using Microsoft.Data.Sqlite;
@@ -42,6 +43,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     sequence INTEGER NOT NULL,
                     kind TEXT NOT NULL DEFAULT 'InspectWorkspace',
                     title TEXT NOT NULL,
+                    definition_json TEXT NULL,
                     status TEXT NOT NULL,
                     result TEXT NULL,
                     result_details TEXT NULL,
@@ -69,6 +71,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             "mission_tasks",
             "kind",
             "TEXT NOT NULL DEFAULT 'InspectWorkspace'",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "mission_tasks",
+            "definition_json",
+            "TEXT NULL",
             cancellationToken);
         await EnsureColumnAsync(
             connection,
@@ -275,10 +283,10 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, status,
+                id, mission_id, sequence, kind, title, definition_json, status,
                 result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $status,
+                $id, $missionId, $sequence, $kind, $title, $definitionJson, $status,
                 $result, $resultDetails, $error, $createdUtc, $updatedUtc);
             """;
 
@@ -296,15 +304,16 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, status,
+                id, mission_id, sequence, kind, title, definition_json, status,
                 result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $status,
+                $id, $missionId, $sequence, $kind, $title, $definitionJson, $status,
                 $result, $resultDetails, $error, $createdUtc, $updatedUtc)
             ON CONFLICT(id) DO UPDATE SET
                 sequence = excluded.sequence,
                 kind = excluded.kind,
                 title = excluded.title,
+                definition_json = excluded.definition_json,
                 status = excluded.status,
                 result = excluded.result,
                 result_details = excluded.result_details,
@@ -356,7 +365,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
 
         await using var taskCommand = connection.CreateCommand();
         taskCommand.CommandText = """
-            SELECT id, mission_id, sequence, kind, title, status,
+            SELECT id, mission_id, sequence, kind, title, definition_json, status,
                    result, result_details, error, created_utc, updated_utc
             FROM mission_tasks
             WHERE mission_id = $missionId
@@ -375,12 +384,15 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 taskReader.GetInt32(2),
                 Enum.Parse<MissionTaskKind>(taskReader.GetString(3)),
                 taskReader.GetString(4),
-                Enum.Parse<DomainTaskStatus>(taskReader.GetString(5)),
-                taskReader.IsDBNull(6) ? null : taskReader.GetString(6),
+                taskReader.IsDBNull(5)
+                    ? null
+                    : JsonSerializer.Deserialize<PlannedTask>(taskReader.GetString(5)),
+                Enum.Parse<DomainTaskStatus>(taskReader.GetString(6)),
                 taskReader.IsDBNull(7) ? null : taskReader.GetString(7),
                 taskReader.IsDBNull(8) ? null : taskReader.GetString(8),
-                ParseTimestamp(taskReader.GetString(9)),
-                ParseTimestamp(taskReader.GetString(10))));
+                taskReader.IsDBNull(9) ? null : taskReader.GetString(9),
+                ParseTimestamp(taskReader.GetString(10)),
+                ParseTimestamp(taskReader.GetString(11))));
         }
 
         if (tasks.Count == 0)
@@ -415,6 +427,11 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Parameters.AddWithValue("$sequence", task.Sequence);
         command.Parameters.AddWithValue("$kind", task.Kind.ToString());
         command.Parameters.AddWithValue("$title", task.Title);
+        command.Parameters.AddWithValue(
+            "$definitionJson",
+            task.Definition is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(task.Definition));
         command.Parameters.AddWithValue("$status", task.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)task.Result ?? DBNull.Value);
         command.Parameters.AddWithValue(
