@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly WorkerPipeClient _workerClient = new();
     private readonly DispatcherTimer _workerHeartbeat;
     private CancellationTokenSource? _missionPolling;
+    private string? _activeMissionId;
     private string? _workspacePath;
     private bool _workerConnected;
     private bool _codexReady;
@@ -262,6 +263,7 @@ public partial class MainWindow : Window
         }
 
         RenderTasks(response.Mission.Tasks);
+        _activeMissionId = response.Mission.Mission.Id;
 
         _missionPolling?.Cancel();
         _missionPolling?.Dispose();
@@ -270,7 +272,7 @@ public partial class MainWindow : Window
         try
         {
             await PollMissionAsync(
-                response.Mission.Mission.Id,
+                _activeMissionId,
                 _missionPolling.Token);
         }
         catch (OperationCanceledException)
@@ -293,12 +295,18 @@ public partial class MainWindow : Window
                     missionId,
                     cancellationToken);
             }
-            catch
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
                 _workerConnected = false;
                 WorkerStatusText.Text = LocalizationService.Get("Disconnected");
-                MissionResultText.Text = LocalizationService.Get("WorkerUnavailable");
-                return;
+
+                // Keep the mission id and stay attached. The Worker is designed
+                // to outlive transient client disconnects and can also restart
+                // and resume persisted missions. Poll again until it returns.
+                await Task.Delay(
+                    TimeSpan.FromSeconds(1),
+                    cancellationToken);
+                continue;
             }
 
             if (!response.Success || response.Mission is null)
@@ -323,6 +331,7 @@ public partial class MainWindow : Window
 
             if (mission.Status is MissionStatus.Completed or MissionStatus.Failed)
             {
+                _activeMissionId = null;
                 return;
             }
 
