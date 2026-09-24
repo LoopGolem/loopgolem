@@ -311,6 +311,7 @@ public partial class MainWindow : Window
         {
             MissionTaskKind.InspectWorkspace => "TaskInspectWorkspace",
             MissionTaskKind.DiscoverProjects => "TaskDiscoverProjects",
+            MissionTaskKind.BuildDotNet => "TaskBuildDotNet",
             _ => kind.ToString()
         });
 

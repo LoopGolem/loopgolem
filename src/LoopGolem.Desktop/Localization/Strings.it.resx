@@ -44,4 +44,5 @@
   <data name="WorkspaceInvalid" xml:space="preserve"><value>L&apos;area di lavoro selezionata non esiste più o non è accessibile.</value></data>
   <data name="MissionGoalRequired" xml:space="preserve"><value>È necessario un obiettivo per la missione.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>Impossibile avviare la missione.</value></data>
+  <data name="TaskBuildDotNet" xml:space="preserve"><value>Compila area di lavoro .NET</value></data>
 </root>

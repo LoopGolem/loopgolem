@@ -44,4 +44,5 @@
   <data name="WorkspaceInvalid" xml:space="preserve"><value>סביבת העבודה שנבחרה אינה קיימת עוד או שאינה נגישה.</value></data>
   <data name="MissionGoalRequired" xml:space="preserve"><value>נדרשת מטרה למשימה.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>לא ניתן היה להתחיל את המשימה.</value></data>
+  <data name="TaskBuildDotNet" xml:space="preserve"><value>בניית סביבת העבודה של .NET</value></data>
 </root>

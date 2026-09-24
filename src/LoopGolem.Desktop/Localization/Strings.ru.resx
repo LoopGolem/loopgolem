@@ -44,4 +44,5 @@
   <data name="WorkspaceInvalid" xml:space="preserve"><value>Выбранная рабочая область больше не существует или недоступна.</value></data>
   <data name="MissionGoalRequired" xml:space="preserve"><value>Необходимо указать цель миссии.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>Не удалось запустить миссию.</value></data>
+  <data name="TaskBuildDotNet" xml:space="preserve"><value>Собрать рабочую область .NET</value></data>
 </root>

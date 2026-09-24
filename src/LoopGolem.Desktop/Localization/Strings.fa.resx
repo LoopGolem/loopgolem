@@ -44,4 +44,5 @@
   <data name="WorkspaceInvalid" xml:space="preserve"><value>فضای کاری انتخاب‌شده دیگر وجود ندارد یا قابل دسترسی نیست.</value></data>
   <data name="MissionGoalRequired" xml:space="preserve"><value>هدف ماموریت لازم است.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>ماموریت شروع نشد.</value></data>
+  <data name="TaskBuildDotNet" xml:space="preserve"><value>ساخت فضای کاری .NET</value></data>
 </root>

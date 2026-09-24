@@ -44,4 +44,5 @@
   <data name="WorkspaceInvalid" xml:space="preserve"><value>The selected workspace no longer exists or is not accessible.</value></data>
   <data name="MissionGoalRequired" xml:space="preserve"><value>A mission goal is required.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>The mission could not be started.</value></data>
+  <data name="TaskBuildDotNet" xml:space="preserve"><value>Build .NET workspace</value></data>
 </root>

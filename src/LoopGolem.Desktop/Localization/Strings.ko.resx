@@ -44,4 +44,5 @@
   <data name="WorkspaceInvalid" xml:space="preserve"><value>선택한 작업 공간이 더 이상 존재하지 않거나 접근할 수 없습니다.</value></data>
   <data name="MissionGoalRequired" xml:space="preserve"><value>미션 목표가 필요합니다.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>미션을 시작할 수 없습니다.</value></data>
+  <data name="TaskBuildDotNet" xml:space="preserve"><value>.NET 작업 공간 빌드</value></data>
 </root>

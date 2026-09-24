@@ -44,4 +44,5 @@
   <data name="WorkspaceInvalid" xml:space="preserve"><value>مساحة العمل المحددة لم تعد موجودة أو لا يمكن الوصول إليها.</value></data>
   <data name="MissionGoalRequired" xml:space="preserve"><value>يلزم تحديد هدف للمهمة.</value></data>
   <data name="CouldNotStartMission" xml:space="preserve"><value>تعذر بدء المهمة.</value></data>
+  <data name="TaskBuildDotNet" xml:space="preserve"><value>بناء مساحة عمل .NET</value></data>
 </root>
