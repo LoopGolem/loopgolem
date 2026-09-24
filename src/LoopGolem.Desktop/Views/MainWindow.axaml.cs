@@ -426,7 +426,7 @@ public partial class MainWindow : Window
 
             var title = new TextBlock
             {
-                Text = GetTaskTitle(task.Kind),
+                Text = GetTaskTitle(task),
                 TextWrapping = Avalonia.Media.TextWrapping.Wrap
             };
 
@@ -437,16 +437,26 @@ public partial class MainWindow : Window
         }
     }
 
-    private static string GetTaskTitle(MissionTaskKind kind) =>
-        LocalizationService.Get(kind switch
+    private static string GetTaskTitle(MissionTask task)
+    {
+        if (task.Kind is MissionTaskKind.DeterministicWork ||
+            (task.Kind == MissionTaskKind.AgentWork &&
+             task.Definition?.Executor == PlannedExecutorKinds.LunaLow))
+        {
+            return task.Title;
+        }
+
+        return LocalizationService.Get(task.Kind switch
         {
             MissionTaskKind.InspectWorkspace => "TaskInspectWorkspace",
             MissionTaskKind.DiscoverProjects => "TaskDiscoverProjects",
+            MissionTaskKind.PlanMission => "TaskPlanMission",
             MissionTaskKind.AgentWork => "TaskAgentWork",
             MissionTaskKind.InspectGitChanges => "TaskInspectGitChanges",
             MissionTaskKind.BuildDotNet => "TaskBuildDotNet",
-            _ => kind.ToString()
+            _ => task.Title
         });
+    }
 
     private static string GetTaskStatusText(DomainTaskStatus status) =>
         LocalizationService.Get(status switch
@@ -483,7 +493,7 @@ public partial class MainWindow : Window
             tasks
                 .OrderBy(task => task.Sequence)
                 .Where(task => !string.IsNullOrWhiteSpace(task.Result))
-                .Select(task => $"{GetTaskTitle(task.Kind)}: {task.Result}"));
+                .Select(task => $"{GetTaskTitle(task)}: {task.Result}"));
 
     private static string GetWorkerErrorText(WorkerResponse response) =>
         response.ErrorCode switch
