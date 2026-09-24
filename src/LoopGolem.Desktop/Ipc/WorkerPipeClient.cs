@@ -15,15 +15,24 @@ public sealed class WorkerPipeClient
             new WorkerRequest(WorkerProtocol.Ping),
             cancellationToken);
 
+    public Task<WorkerResponse> GetCodexStatusAsync(
+        CancellationToken cancellationToken = default) =>
+        SendAsync(
+            new WorkerRequest(WorkerProtocol.GetCodexStatus),
+            cancellationToken,
+            TimeSpan.FromSeconds(15));
+
     public Task<WorkerResponse> CreateMissionAsync(
         string goal,
         string workspacePath,
+        LoopGolem.Core.Domain.MissionExecutionMode executionMode,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             new WorkerRequest(
                 WorkerProtocol.CreateMission,
                 Goal: goal,
-                WorkspacePath: workspacePath),
+                WorkspacePath: workspacePath,
+                ExecutionMode: executionMode),
             cancellationToken);
 
     public Task<WorkerResponse> GetMissionAsync(
@@ -37,11 +46,12 @@ public sealed class WorkerPipeClient
 
     private static async Task<WorkerResponse> SendAsync(
         WorkerRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+        timeout.CancelAfter(requestTimeout ?? TimeSpan.FromSeconds(2));
 
         await using var pipe = new NamedPipeClientStream(
             ".",

@@ -18,6 +18,8 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _missionPolling;
     private string? _workspacePath;
     private bool _workerConnected;
+    private bool _codexReady;
+    private bool _codexChecked;
     private bool _refreshingWorkerStatus;
 
     public MainWindow()
@@ -57,6 +59,9 @@ public partial class MainWindow : Window
         TitleText.Text = LocalizationService.Get("AppTitle");
         SubtitleText.Text = LocalizationService.Get("AppSubtitle");
         WorkerLabel.Text = $"{LocalizationService.Get("Worker")}:";
+        CodexLabel.Text = $"{LocalizationService.Get("Codex")}:";
+        CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
+        UseCodexCheckBox.Content = LocalizationService.Get("UseCodex");
         WorkspaceLabel.Text = LocalizationService.Get("Workspace");
         BrowseButton.Content = LocalizationService.Get("Browse");
         MissionGoalLabel.Text = LocalizationService.Get("MissionGoal");
@@ -109,11 +114,46 @@ public partial class MainWindow : Window
                 MissionResultText.Text = string.Empty;
             }
 
+            if (_workerConnected && !_codexChecked)
+            {
+                await RefreshCodexStatusAsync();
+            }
+
             UpdateStartButtonState();
         }
         finally
         {
             _refreshingWorkerStatus = false;
+        }
+    }
+
+    private async Task RefreshCodexStatusAsync()
+    {
+        _codexChecked = true;
+
+        try
+        {
+            var response = await _workerClient.GetCodexStatusAsync();
+            _codexReady =
+                response.Success &&
+                response.CodexStatus is
+                {
+                    Available: true,
+                    ChatGptAuthenticated: true
+                };
+        }
+        catch
+        {
+            _codexReady = false;
+        }
+
+        CodexStatusText.Text = LocalizationService.Get(
+            _codexReady ? "CodexReady" : "CodexUnavailable");
+        UseCodexCheckBox.IsEnabled = _codexReady;
+
+        if (!_codexReady)
+        {
+            UseCodexCheckBox.IsChecked = false;
         }
     }
 
@@ -173,7 +213,10 @@ public partial class MainWindow : Window
         {
             response = await _workerClient.CreateMissionAsync(
                 goal,
-                _workspacePath);
+                _workspacePath,
+                UseCodexCheckBox.IsChecked == true
+                    ? MissionExecutionMode.Codex
+                    : MissionExecutionMode.ValidateOnly);
         }
         catch
         {
@@ -311,6 +354,8 @@ public partial class MainWindow : Window
         {
             MissionTaskKind.InspectWorkspace => "TaskInspectWorkspace",
             MissionTaskKind.DiscoverProjects => "TaskDiscoverProjects",
+            MissionTaskKind.AgentWork => "TaskAgentWork",
+            MissionTaskKind.InspectGitChanges => "TaskInspectGitChanges",
             MissionTaskKind.BuildDotNet => "TaskBuildDotNet",
             _ => kind.ToString()
         });
