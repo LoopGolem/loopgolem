@@ -101,6 +101,38 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
                 null);
     }
 
+    public async Task<string?> ResolveCodexPathAsync(
+        string distribution,
+        CancellationToken cancellationToken = default)
+    {
+        const string resolver =
+            "if [ -x \"$HOME/.local/bin/codex\" ]; then " +
+            "printf '%s\\n' \"$HOME/.local/bin/codex\"; " +
+            "else command -v codex 2>/dev/null || true; fi";
+
+        var run = await RunAsync(
+            distribution,
+            ["sh", "-c", resolver],
+            ProbeTimeout,
+            cancellationToken);
+
+        if (run.TimedOut || run.ExitCode != 0)
+        {
+            return null;
+        }
+
+        var path = run.StandardOutput
+            .Split(
+                ['\\r', '\\n'],
+                StringSplitOptions.RemoveEmptyEntries |
+                StringSplitOptions.TrimEntries)
+            .LastOrDefault();
+
+        return string.IsNullOrWhiteSpace(path)
+            ? null
+            : path;
+    }
+
     public Task<ProcessRunResult> RunAsync(
         string distribution,
         IEnumerable<string> linuxArguments,

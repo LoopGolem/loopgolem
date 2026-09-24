@@ -25,11 +25,13 @@ LoopGolem ignores infrastructure-only distributions such as `docker-desktop`. Se
 Windows onboarding requirements:
 
 1. Install a WSL2 Linux distribution, for example Ubuntu.
-2. Install the official Codex CLI inside that distribution.
+2. Install the official Codex CLI inside that distribution. The official Linux installer currently places the binary in `~/.local/bin/codex` by default.
 3. Run `codex` inside the distribution and choose **Sign in with ChatGPT**.
 4. Verify inside WSL with `codex login status`.
 
 The Windows Codex CLI installation is not used for autonomous LoopGolem agent execution.
+
+LoopGolem resolves the WSL executable explicitly. It first checks `~/.local/bin/codex` (the official installer default) and then falls back to `command -v codex`. The resolved absolute Linux path is used for status checks and agent execution, so LoopGolem does not depend on the non-interactive WSL process inheriting a login-shell PATH.
 
 ## Linux
 

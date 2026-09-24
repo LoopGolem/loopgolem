@@ -131,6 +131,17 @@ public sealed class CodexCliService
                 outputSchemaPath,
                 cancellationToken);
 
+            var codexPath = await _wsl.ResolveCodexPathAsync(
+                distribution,
+                cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(codexPath))
+            {
+                return TaskExecutionResult.Failed(
+                    "Codex CLI is unavailable inside WSL.",
+                    $"LoopGolem could not resolve the Codex executable inside WSL distribution '{distribution}'.");
+            }
+
             var codexArguments = BuildCodexArguments(
                 wslWorkspace,
                 wslOutputSchema,
@@ -138,7 +149,7 @@ public sealed class CodexCliService
 
             run = await _wsl.RunAsync(
                 distribution,
-                ["codex", .. codexArguments],
+                [codexPath, .. codexArguments],
                 ExecutionTimeout,
                 cancellationToken,
                 BuildPrompt(mission));
@@ -309,13 +320,29 @@ public sealed class CodexCliService
         }
 
         var distro = distribution.Distribution;
+        var codexPath = await _wsl.ResolveCodexPathAsync(
+            distro,
+            cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(codexPath))
+        {
+            return new CodexRuntimeStatus(
+                false,
+                false,
+                null,
+                "Codex CLI is not installed or could not be resolved inside the selected WSL distribution.",
+                CodexRuntimeState.CodexCliMissing,
+                "wsl",
+                distro,
+                DefaultModel);
+        }
 
         ProcessRunResult version;
         try
         {
             version = await _wsl.RunAsync(
                 distro,
-                ["codex", "--version"],
+                [codexPath, "--version"],
                 StatusTimeout,
                 cancellationToken);
         }
@@ -347,7 +374,7 @@ public sealed class CodexCliService
 
         var login = await _wsl.RunAsync(
             distro,
-            ["codex", "login", "status"],
+            [codexPath, "login", "status"],
             StatusTimeout,
             cancellationToken);
 
