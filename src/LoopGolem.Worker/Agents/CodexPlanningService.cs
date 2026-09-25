@@ -8,7 +8,7 @@ namespace LoopGolem.Worker.Agents;
 public sealed class CodexPlanningService(
     ProcessRunner processRunner,
     CodexCliService runtime,
-    CodexSessionTransport transport,
+    ICodexSessionTransport transport,
     CodexSupervisorSessionService supervisor,
     EnvironmentCapabilityService capabilityService)
 {
