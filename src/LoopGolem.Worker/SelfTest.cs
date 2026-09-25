@@ -1977,7 +1977,6 @@ internal static class SelfTest
                     cancellationToken);
 
                 return Success(
-                    request,
                     session,
                     1);
             }
@@ -2007,13 +2006,11 @@ internal static class SelfTest
                 cancellationToken);
 
             return Success(
-                request,
                 updated,
                 turnNumber);
         }
 
         private static CodexStructuredRunResult Success(
-            CodexStructuredRunRequest request,
             AgentSession session,
             int turnNumber) =>
             new(
