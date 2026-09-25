@@ -236,6 +236,14 @@ public sealed class CodexSupervisorSessionService(
             await store.GetCapabilitySnapshotAsync(
                 missionId,
                 cancellationToken);
+        var attempts =
+            await store.ListTaskAttemptsAsync(
+                missionId,
+                cancellationToken);
+        var recoveryCycles =
+            await store.ListRecoveryCyclesAsync(
+                missionId,
+                cancellationToken);
 
         var persistedState =
             JsonSerializer.Serialize(
@@ -260,9 +268,16 @@ public sealed class CodexSupervisorSessionService(
                             task.Status,
                             task.ExecutionAttemptCount,
                             task.Result,
+                            task.ResultDetails,
                             task.Error,
                             task.Definition
-                        })
+                        }),
+                    attempts = attempts
+                        .OrderBy(attempt =>
+                            attempt.StartedAtUtc),
+                    recoveryCycles = recoveryCycles
+                        .OrderBy(cycle =>
+                            cycle.CreatedAtUtc)
                 },
                 JsonOptions);
 
