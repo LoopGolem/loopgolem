@@ -4,6 +4,7 @@ using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Agents;
 using LoopGolem.Worker.Execution;
 using LoopGolem.Worker.Infrastructure;
+using Microsoft.Data.Sqlite;
 using DomainTaskStatus = LoopGolem.Core.Domain.TaskStatus;
 
 namespace LoopGolem.Worker;
@@ -107,6 +108,11 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyLegacyDatabaseMigrationAsync(root))
+            {
+                return 1;
+            }
+
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
@@ -189,6 +195,13 @@ internal static class SelfTest
             {
                 Console.Error.WriteLine(
                     "Self-test failed initial planning.");
+                return 1;
+            }
+
+            if (!await VerifyExecutionTelemetryPersistenceAsync(
+                    store,
+                    created))
+            {
                 return 1;
             }
 
@@ -278,6 +291,224 @@ internal static class SelfTest
         }
     }
 
+
+    private static async Task<bool> VerifyLegacyDatabaseMigrationAsync(
+        string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "legacy-migration.db");
+        Directory.CreateDirectory(
+            Path.GetDirectoryName(database)!);
+
+        await using (var connection =
+                     new SqliteConnection(
+                         new SqliteConnectionStringBuilder
+                         {
+                             DataSource = database
+                         }.ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE missions (
+                    id TEXT PRIMARY KEY,
+                    goal TEXT NOT NULL,
+                    workspace_path TEXT NOT NULL,
+                    execution_mode TEXT NOT NULL DEFAULT 'ValidateOnly',
+                    status TEXT NOT NULL,
+                    result TEXT NULL,
+                    error TEXT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+
+                CREATE TABLE mission_tasks (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'InspectWorkspace',
+                    title TEXT NOT NULL,
+                    definition_json TEXT NULL,
+                    execution_context TEXT NULL,
+                    execution_attempt_count INTEGER NOT NULL DEFAULT 0,
+                    token_usage_json TEXT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT NULL,
+                    result_details TEXT NULL,
+                    error TEXT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE
+                );
+
+                INSERT INTO missions (
+                    id, goal, workspace_path, execution_mode, status,
+                    created_utc, updated_utc)
+                VALUES (
+                    'legacy-mission', 'legacy goal', '.', 'Codex', 'Created',
+                    '2026-01-01T00:00:00.0000000+00:00',
+                    '2026-01-01T00:00:00.0000000+00:00');
+
+                INSERT INTO mission_tasks (
+                    id, mission_id, sequence, kind, title, status,
+                    created_utc, updated_utc)
+                VALUES (
+                    'legacy-task', 'legacy-mission', 1, 'InspectWorkspace',
+                    'Legacy task', 'Ready',
+                    '2026-01-01T00:00:00.0000000+00:00',
+                    '2026-01-01T00:00:00.0000000+00:00');
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var store = new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var snapshot = await store.GetAsync("legacy-mission");
+        if (snapshot is null ||
+            snapshot.Mission.Policy != MissionExecutionPolicy.Default ||
+            snapshot.Tasks.Count != 1)
+        {
+            Console.Error.WriteLine(
+                "Self-test did not migrate a legacy mission database safely.");
+            return false;
+        }
+
+        if ((await store.ListTaskAttemptsAsync("legacy-mission")).Count != 0 ||
+            (await store.ListAgentSessionsAsync("legacy-mission")).Count != 0 ||
+            (await store.ListAgentTurnsAsync("legacy-mission")).Count != 0 ||
+            (await store.ListRecoveryEpisodesAsync("legacy-mission")).Count != 0)
+        {
+            Console.Error.WriteLine(
+                "Self-test legacy migration created unexpected telemetry rows.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool> VerifyExecutionTelemetryPersistenceAsync(
+        SqliteMissionStore store,
+        MissionSnapshot snapshot)
+    {
+        var plannerTask = snapshot.Tasks.First(
+            task => task.Kind == MissionTaskKind.PlanMission);
+        var missionId = snapshot.Mission.Id;
+        var now = DateTimeOffset.UtcNow;
+
+        var configured = snapshot with
+        {
+            Mission = snapshot.Mission with
+            {
+                Policy = new MissionExecutionPolicy(
+                    MaxDeterministicRecoveryCycles: 4,
+                    MaxValidationCycles: 5,
+                    SessionReuse: SessionReuseMode.Affinity)
+            }
+        };
+        await store.UpdateAsync(configured);
+
+        var attempt = new MissionTaskAttempt(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            plannerTask.Id,
+            1,
+            TaskAttemptOutcome.Failed,
+            TaskFailureKind.DeterministicCheck,
+            "Synthetic deterministic failure.",
+            "{\"exitCode\":1}",
+            now,
+            now.AddMilliseconds(10));
+        await store.SaveTaskAttemptAsync(attempt);
+
+        var session = new AgentSession(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            AgentSessionRole.Supervisor,
+            "codex",
+            "self-test-thread",
+            "gpt-6-luna",
+            "high",
+            AgentSessionStatus.Active,
+            null,
+            1,
+            0,
+            now,
+            now,
+            null,
+            null);
+        await store.SaveAgentSessionAsync(session);
+
+        var turn = new AgentTurn(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            session.Id,
+            plannerTask.Id,
+            AgentTurnPurpose.Recovery,
+            1,
+            "gpt-6-luna",
+            "high",
+            new TokenUsage(100, 40, 20, 5, 120)
+            {
+                CacheWriteInputTokens = 7
+            },
+            now,
+            now.AddMilliseconds(25),
+            25,
+            true,
+            null);
+        await store.SaveAgentTurnAsync(turn);
+
+        var episode = new RecoveryEpisode(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            plannerTask.Id,
+            1,
+            RecoveryEpisodeStatus.Planning,
+            attempt.Id,
+            turn.Id,
+            ["repair-a", "repair-b"],
+            attempt.EvidenceJson,
+            now,
+            now);
+        await store.SaveRecoveryEpisodeAsync(episode);
+
+        // Read through the store now; the main self-test reopens the same
+        // database later and verifies that expanded mission state also survives.
+        var persistedMission = await store.GetAsync(missionId);
+        var attempts = await store.ListTaskAttemptsAsync(missionId);
+        var sessions = await store.ListAgentSessionsAsync(missionId);
+        var turns = await store.ListAgentTurnsAsync(missionId);
+        var episodes = await store.ListRecoveryEpisodesAsync(missionId);
+
+        if (persistedMission?.Mission.Policy != configured.Mission.Policy ||
+            attempts.Count != 1 ||
+            attempts[0] != attempt ||
+            sessions.Count != 1 ||
+            sessions[0] != session ||
+            turns.Count != 1 ||
+            turns[0].TokenUsage is not { } usage ||
+            usage.InputTokens != 100 ||
+            usage.CachedInputTokens != 40 ||
+            usage.CacheWriteInputTokens != 7 ||
+            usage.OutputTokens != 20 ||
+            usage.ReasoningOutputTokens != 5 ||
+            usage.TotalTokens != 120 ||
+            episodes.Count != 1 ||
+            episodes[0].RepairTaskIds.Count != 2 ||
+            episodes[0].RepairTaskIds[0] != "repair-a" ||
+            episodes[0].RepairTaskIds[1] != "repair-b")
+        {
+            Console.Error.WriteLine(
+                "Self-test did not persist normalized execution telemetry.");
+            return false;
+        }
+
+        return true;
+    }
+
     private static async Task<bool> InitializeGitAsync(
         ProcessRunner processRunner,
         string workspace)
@@ -336,7 +567,7 @@ internal static class SelfTest
     private static bool VerifyTokenUsageParsing()
     {
         const string modernJson =
-            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"cache_write_input_tokens\":7,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
 
         var usage = CodexPlanningService.ParseTokenUsage(
             modernJson);
@@ -344,6 +575,7 @@ internal static class SelfTest
         if (usage is null ||
             usage.InputTokens != 100 ||
             usage.CachedInputTokens != 40 ||
+            usage.CacheWriteInputTokens != 7 ||
             usage.OutputTokens != 20 ||
             usage.ReasoningOutputTokens != 5 ||
             usage.TotalTokens != 120)
