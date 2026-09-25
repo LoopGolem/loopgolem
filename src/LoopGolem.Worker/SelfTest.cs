@@ -54,6 +54,13 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyStreamingProcessRunnerAsync(
+                    processRunner,
+                    workspace))
+            {
+                return 1;
+            }
+
             if (!await VerifyInterruptedRenameRecoveryAsync(
                     processRunner,
                     workspace))
@@ -103,7 +110,8 @@ internal static class SelfTest
                 return 1;
             }
 
-            if (!VerifyTokenUsageParsing())
+            if (!VerifyTokenUsageParsing() ||
+                !VerifyCodexSessionArguments())
             {
                 return 1;
             }
@@ -292,6 +300,89 @@ internal static class SelfTest
         }
     }
 
+
+
+    private static async Task<bool> VerifyStreamingProcessRunnerAsync(
+        ProcessRunner processRunner,
+        string workspace)
+    {
+        var lines = new List<string>();
+
+        var run = await processRunner.RunStreamingAsync(
+            "git",
+            ["--version"],
+            workspace,
+            TimeSpan.FromSeconds(30),
+            line =>
+            {
+                lines.Add(line);
+                return Task.CompletedTask;
+            });
+
+        if (run.ExitCode != 0 ||
+            run.TimedOut ||
+            lines.Count == 0 ||
+            !run.StandardOutput.Contains(
+                lines[0],
+                StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "Self-test did not stream process stdout while preserving captured output.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool VerifyCodexSessionArguments()
+    {
+        var ephemeral = CodexPlanningService.BuildArguments(
+            "/workspace",
+            "gpt-6-luna",
+            "low",
+            "workspace-write",
+            "/schema.json",
+            "/output.json",
+            CodexSessionRequest.EphemeralFresh);
+
+        var persistent = CodexPlanningService.BuildArguments(
+            "/workspace",
+            "gpt-6-luna",
+            "high",
+            "read-only",
+            "/schema.json",
+            "/output.json",
+            CodexSessionRequest.NewPersistent);
+
+        var resumed = CodexPlanningService.BuildArguments(
+            "/workspace",
+            "gpt-6-luna",
+            "high",
+            "read-only",
+            "/schema.json",
+            "/output.json",
+            CodexSessionRequest.Resume(
+                "local-session",
+                "codex-thread"));
+
+        if (!ephemeral.Contains("--ephemeral", StringComparer.Ordinal) ||
+            persistent.Contains("--ephemeral", StringComparer.Ordinal) ||
+            resumed.Contains("--ephemeral", StringComparer.Ordinal) ||
+            !ephemeral.Contains("memories", StringComparer.Ordinal) ||
+            !persistent.Contains("memories", StringComparer.Ordinal) ||
+            !resumed.Contains("memories", StringComparer.Ordinal) ||
+            resumed.Count < 3 ||
+            resumed[0] != "exec" ||
+            resumed[1] != "resume" ||
+            resumed[2] != "codex-thread")
+        {
+            Console.Error.WriteLine(
+                "Self-test Codex session transport arguments are invalid.");
+            return false;
+        }
+
+        return true;
+    }
 
     private static async Task<bool> VerifyLegacyDatabaseMigrationAsync(
         string root)
