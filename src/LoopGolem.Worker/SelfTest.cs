@@ -448,7 +448,7 @@ internal static class SelfTest
     private static bool VerifyTokenUsageParsing()
     {
         const string modernJson =
-            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"cache_write_input_tokens\":7,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
 
         var usage = CodexPlanningService.ParseTokenUsage(
             modernJson);
@@ -456,6 +456,7 @@ internal static class SelfTest
         if (usage is null ||
             usage.InputTokens != 100 ||
             usage.CachedInputTokens != 40 ||
+            usage.CacheWriteInputTokens != 7 ||
             usage.OutputTokens != 20 ||
             usage.ReasoningOutputTokens != 5 ||
             usage.TotalTokens != 120)
