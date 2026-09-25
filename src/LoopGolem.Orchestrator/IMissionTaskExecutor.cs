@@ -22,3 +22,14 @@ public interface IMissionTaskExecutionContextProvider
         MissionTask task,
         CancellationToken cancellationToken = default);
 }
+
+
+public interface IMissionRecoveryPlanner
+{
+    Task<RecoveryPlanningResult> PlanRecoveryAsync(
+        Mission mission,
+        MissionTask failedTask,
+        MissionTaskAttempt failureAttempt,
+        RecoveryCycle cycle,
+        CancellationToken cancellationToken = default);
+}

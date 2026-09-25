@@ -33,7 +33,8 @@ public sealed record CodexStructuredRunResult(
     TokenUsage? TokenUsage,
     string SessionId,
     string? ProviderThreadId,
-    int TurnNumber);
+    int TurnNumber,
+    string TurnId);
 
 public interface ICodexSessionTransport
 {
@@ -306,7 +307,8 @@ public sealed class CodexSessionTransport(
                 latestUsage,
                 session.Id,
                 resumableThreadId,
-                turnNumber);
+                turnNumber,
+                turn.Id);
         }
         finally
         {

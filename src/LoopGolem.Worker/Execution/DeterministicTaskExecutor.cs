@@ -64,7 +64,8 @@ public sealed class DeterministicTaskExecutor(
         {
             return TaskExecutionResult.Failed(
                 "Deterministic task definition is missing.",
-                "The planner did not provide a valid deterministic task definition.");
+                "The planner did not provide a valid deterministic task definition.",
+                failureKind: TaskFailureKind.InfrastructureFailure);
         }
 
         var op = definition.Deterministic;
@@ -83,14 +84,16 @@ public sealed class DeterministicTaskExecutor(
                     await RunCommandAsync(mission, op, cancellationToken),
                 _ => TaskExecutionResult.Failed(
                     "Unsupported deterministic operation.",
-                    $"Operation '{op.Kind}' is not supported.")
+                    $"Operation '{op.Kind}' is not supported.",
+                    failureKind: TaskFailureKind.InfrastructureFailure)
             };
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return TaskExecutionResult.Failed(
                 $"Deterministic operation '{op.Kind}' failed.",
-                exception.Message);
+                exception.Message,
+                failureKind: TaskFailureKind.InfrastructureFailure);
         }
     }
 
@@ -200,7 +203,8 @@ public sealed class DeterministicTaskExecutor(
         {
             return TaskExecutionResult.Failed(
                 "run_command working directory does not exist.",
-                op.WorkingDirectory);
+                op.WorkingDirectory,
+                failureKind: TaskFailureKind.InfrastructureFailure);
         }
 
         var result = await processRunner.RunAsync(
@@ -217,7 +221,9 @@ public sealed class DeterministicTaskExecutor(
             return TaskExecutionResult.Failed(
                 $"Command '{op.Executable}' timed out.",
                 $"Timeout: {op.TimeoutSeconds} seconds.",
-                details);
+                details,
+                failureKind:
+                    TaskFailureKind.KnownDeterministicFailure);
         }
 
         if (result.ExitCode != 0)
@@ -228,7 +234,9 @@ public sealed class DeterministicTaskExecutor(
             return TaskExecutionResult.Failed(
                 $"Command '{op.Executable}' exited with code {result.ExitCode}.",
                 error.Trim(),
-                details);
+                details,
+                failureKind:
+                    TaskFailureKind.KnownDeterministicFailure);
         }
 
         return TaskExecutionResult.Succeeded(

@@ -19,6 +19,7 @@ public sealed partial class SqliteMissionStore
                 task_id TEXT NOT NULL,
                 attempt_number INTEGER NOT NULL,
                 outcome TEXT NOT NULL,
+                failure_kind TEXT NOT NULL DEFAULT 'None',
                 summary TEXT NULL,
                 error TEXT NULL,
                 evidence_json TEXT NULL,
@@ -104,6 +105,13 @@ public sealed partial class SqliteMissionStore
             """;
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await EnsureColumnAsync(
+            connection,
+            "mission_task_attempts",
+            "failure_kind",
+            "TEXT NOT NULL DEFAULT 'None'",
+            cancellationToken);
     }
 
     public async Task UpsertTaskAttemptAsync(
@@ -114,16 +122,17 @@ public sealed partial class SqliteMissionStore
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO mission_task_attempts (
-                id, mission_id, task_id, attempt_number, outcome, summary, error,
+                id, mission_id, task_id, attempt_number, outcome, failure_kind, summary, error,
                 evidence_json, started_utc, completed_utc)
             VALUES (
-                $id, $missionId, $taskId, $attemptNumber, $outcome, $summary, $error,
+                $id, $missionId, $taskId, $attemptNumber, $outcome, $failureKind, $summary, $error,
                 $evidenceJson, $startedUtc, $completedUtc)
             ON CONFLICT(id) DO UPDATE SET
                 mission_id = excluded.mission_id,
                 task_id = excluded.task_id,
                 attempt_number = excluded.attempt_number,
                 outcome = excluded.outcome,
+                failure_kind = excluded.failure_kind,
                 summary = excluded.summary,
                 error = excluded.error,
                 evidence_json = excluded.evidence_json,
@@ -136,6 +145,7 @@ public sealed partial class SqliteMissionStore
         command.Parameters.AddWithValue("$taskId", attempt.TaskId);
         command.Parameters.AddWithValue("$attemptNumber", attempt.AttemptNumber);
         command.Parameters.AddWithValue("$outcome", attempt.Outcome.ToString());
+        command.Parameters.AddWithValue("$failureKind", attempt.FailureKind.ToString());
         command.Parameters.AddWithValue("$summary", (object?)attempt.Summary ?? DBNull.Value);
         command.Parameters.AddWithValue("$error", (object?)attempt.Error ?? DBNull.Value);
         command.Parameters.AddWithValue("$evidenceJson", (object?)attempt.EvidenceJson ?? DBNull.Value);
@@ -156,7 +166,7 @@ public sealed partial class SqliteMissionStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, mission_id, task_id, attempt_number, outcome, summary, error,
+            SELECT id, mission_id, task_id, attempt_number, outcome, failure_kind, summary, error,
                    evidence_json, started_utc, completed_utc
             FROM mission_task_attempts
             WHERE mission_id = $missionId
@@ -168,17 +178,34 @@ public sealed partial class SqliteMissionStore
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            results.Add(new MissionTaskAttempt(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetInt32(3),
-                Enum.Parse<MissionTaskAttemptOutcome>(reader.GetString(4)),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6),
-                reader.IsDBNull(7) ? null : reader.GetString(7),
-                ParseTimestamp(reader.GetString(8)),
-                reader.IsDBNull(9) ? null : ParseTimestamp(reader.GetString(9))));
+            results.Add(
+                new MissionTaskAttempt(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetInt32(3),
+                    Enum.Parse<MissionTaskAttemptOutcome>(
+                        reader.GetString(4)),
+                    reader.IsDBNull(6)
+                        ? null
+                        : reader.GetString(6),
+                    reader.IsDBNull(7)
+                        ? null
+                        : reader.GetString(7),
+                    reader.IsDBNull(8)
+                        ? null
+                        : reader.GetString(8),
+                    ParseTimestamp(
+                        reader.GetString(9)),
+                    reader.IsDBNull(10)
+                        ? null
+                        : ParseTimestamp(
+                            reader.GetString(10)))
+                {
+                    FailureKind =
+                        Enum.Parse<TaskFailureKind>(
+                            reader.GetString(5))
+                });
         }
 
         return results;
