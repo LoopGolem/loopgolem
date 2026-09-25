@@ -542,7 +542,7 @@ public partial class MainWindow : Window
         LocalizationService.Get(role switch
         {
             AgentSessionRole.Supervisor => "Supervisor",
-            AgentSessionRole.Worker => "WorkerRole",
+            AgentSessionRole.Worker => "Worker",
             AgentSessionRole.Validator => "Validator",
             _ => role.ToString()
         });
