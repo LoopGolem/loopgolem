@@ -22,6 +22,12 @@ LoopGolem is an open-source autonomous task orchestrator for Windows and Linux. 
 
 English, Portuguese (Brazil), Spanish, German, Italian, French, Hebrew, Arabic, Persian, Japanese, Korean and Russian. Arabic, Hebrew and Persian are right-to-left from the start.
 
+## Current autonomous flow
+
+Codex missions use a persistent GPT-6 Luna High Supervisor for planning/recovery, bounded GPT-6 Luna Low workers with optional context affinity, deterministic host verification, and a separate persistent GPT-6 Luna High Validator for an independent final review. Recovery, session/turn telemetry and mission state are persisted in SQLite.
+
+The controlled TaskForge benchmark procedure is documented in [docs/benchmark-v2.md](docs/benchmark-v2.md).
+
 ## Development
 
 Requires the .NET 10 SDK.
