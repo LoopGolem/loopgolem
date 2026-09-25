@@ -327,7 +327,10 @@ internal static class SelfTest
                 completed.Tasks.Any(
                     task =>
                         task.Status != DomainTaskStatus.Completed ||
-                        task.ExecutionAttemptCount != 1))
+                        task.ExecutionAttemptCount !=
+                            (task.Id == telemetryTask.Id
+                                ? 2
+                                : 1)))
             {
                 Console.Error.WriteLine(
                     "Self-test failed planner/validator mission execution.");
