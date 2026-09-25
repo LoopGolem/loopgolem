@@ -1036,7 +1036,7 @@ public sealed partial class MissionOrchestrator : IMissionOrchestrator
             return (
                 null,
                 $"Validator task context is invalid: {exception.Message}");
-        }ber}";
+        }
 
     private static MissionSnapshot UpdateReadyStates(
         MissionSnapshot snapshot,
