@@ -192,6 +192,28 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
                 if (recovering)
                 {
+                    var reconciled =
+                        await ReconcilePersistedDeterministicAttemptAsync(
+                            snapshot,
+                            current,
+                            cancellationToken);
+
+                    if (reconciled is not null)
+                    {
+                        snapshot =
+                            reconciled.Snapshot;
+
+                        if (reconciled.Terminal)
+                        {
+                            return snapshot;
+                        }
+
+                        if (reconciled.Reevaluate)
+                        {
+                            continue;
+                        }
+                    }
+
                     await MarkPreviousAttemptInterruptedAsync(
                         current,
                         cancellationToken);
@@ -1044,6 +1066,163 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         string taskId,
         int attemptNumber) =>
         $"{taskId}:attempt:{attemptNumber}";
+
+    private async Task<RecoveryAdvanceResult?>
+        ReconcilePersistedDeterministicAttemptAsync(
+            MissionSnapshot snapshot,
+            MissionTask task,
+            CancellationToken cancellationToken)
+    {
+        if (task.Kind is not (
+                MissionTaskKind.DeterministicWork or
+                MissionTaskKind.BuildDotNet) ||
+            task.ExecutionAttemptCount <= 0)
+        {
+            return null;
+        }
+
+        var attempts =
+            await _store.ListTaskAttemptsAsync(
+                task.MissionId,
+                cancellationToken);
+        var persisted =
+            attempts.FirstOrDefault(
+                attempt =>
+                    attempt.TaskId == task.Id &&
+                    attempt.AttemptNumber ==
+                        task.ExecutionAttemptCount);
+
+        if (persisted is null)
+        {
+            return null;
+        }
+
+        var now =
+            DateTimeOffset.UtcNow;
+
+        if (persisted.Outcome ==
+            MissionTaskAttemptOutcome.Succeeded)
+        {
+            var completed =
+                task with
+                {
+                    Status =
+                        DomainTaskStatus.Completed,
+                    Result =
+                        persisted.Summary ??
+                        "Persisted deterministic attempt succeeded.",
+                    ResultDetails =
+                        persisted.EvidenceJson,
+                    Error = null,
+                    UpdatedAtUtc = now
+                };
+
+            snapshot =
+                ReplaceTask(
+                    snapshot,
+                    completed);
+
+            await _store.UpdateAsync(
+                snapshot,
+                cancellationToken);
+
+            await MarkRecoverySucceededIfNeededAsync(
+                completed,
+                now,
+                CancellationToken.None);
+
+            return new RecoveryAdvanceResult(
+                snapshot,
+                false,
+                true);
+        }
+
+        if (persisted.Outcome !=
+            MissionTaskAttemptOutcome.Failed)
+        {
+            return null;
+        }
+
+        var failure =
+            TaskExecutionResult.Failed(
+                persisted.Summary ??
+                    $"Task '{task.Title}' failed.",
+                persisted.Error ??
+                    "The persisted deterministic attempt failed.",
+                persisted.EvidenceJson,
+                failureKind:
+                    persisted.FailureKind);
+
+        var failedTask =
+            task with
+            {
+                Status =
+                    DomainTaskStatus.Failed,
+                Result =
+                    failure.Summary,
+                ResultDetails =
+                    failure.Details,
+                Error =
+                    failure.Error,
+                UpdatedAtUtc = now
+            };
+
+        if (CanAutomaticallyRecover(
+                snapshot.Mission,
+                task,
+                failure))
+        {
+            var recoveryTask =
+                failedTask with
+                {
+                    Status =
+                        DomainTaskStatus.RecoveryPending
+                };
+
+            snapshot =
+                ReplaceTask(
+                    snapshot with
+                    {
+                        Mission =
+                            snapshot.Mission with
+                            {
+                                Status =
+                                    MissionStatus.Running,
+                                Error = null,
+                                UpdatedAtUtc = now
+                            }
+                    },
+                    recoveryTask);
+
+            await _store.UpdateAsync(
+                snapshot,
+                cancellationToken);
+
+            return await BeginOrContinueRecoveryAsync(
+                snapshot,
+                recoveryTask,
+                persisted,
+                now,
+                cancellationToken);
+        }
+
+        snapshot =
+            ReplaceTask(
+                snapshot,
+                failedTask);
+
+        snapshot =
+            await MarkMissionFailedAsync(
+                snapshot,
+                failedTask.Error ??
+                    failure.Summary,
+                cancellationToken);
+
+        return new RecoveryAdvanceResult(
+            snapshot,
+            true,
+            false);
+    }
 
     private async Task MarkPreviousAttemptInterruptedAsync(
         MissionTask task,
