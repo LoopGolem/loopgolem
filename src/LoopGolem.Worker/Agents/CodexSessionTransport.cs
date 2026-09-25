@@ -35,10 +35,17 @@ public sealed record CodexStructuredRunResult(
     string? ProviderThreadId,
     int TurnNumber);
 
+public interface ICodexSessionTransport
+{
+    Task<CodexStructuredRunResult> RunStructuredAsync(
+        CodexStructuredRunRequest request,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed class CodexSessionTransport(
     ProcessRunner processRunner,
     CodexCliService runtime,
-    IMissionStore store)
+    IMissionStore store) : ICodexSessionTransport
 {
     private static readonly TimeSpan ExecutionTimeout =
         TimeSpan.FromMinutes(60);

@@ -8,7 +8,8 @@ namespace LoopGolem.Worker.Agents;
 public sealed class CodexPlanningService(
     ProcessRunner processRunner,
     CodexCliService runtime,
-    CodexSessionTransport transport,
+    ICodexSessionTransport transport,
+    CodexSupervisorSessionService supervisor,
     EnvironmentCapabilityService capabilityService)
 {
 
@@ -61,23 +62,17 @@ public sealed class CodexPlanningService(
             mission.WorkspacePath,
             cancellationToken);
 
-        var run = await transport.RunStructuredAsync(
-            new CodexStructuredRunRequest(
-                mission.Id,
-                task.Id,
-                AgentSessionRole.Supervisor,
-                AgentTurnPurpose.Planning,
-                CodexSessionMode.FreshEphemeral,
-                null,
-                mission.WorkspacePath,
+        var run =
+            await supervisor.RunPlanningAsync(
+                mission,
+                task,
                 PlannerModel,
                 PlannerReasoning,
-                "read-only",
                 PlannerSchema,
                 BuildPlannerPrompt(
                     mission,
-                    capabilities)),
-            cancellationToken);
+                    capabilities),
+                cancellationToken);
 
         DevelopmentDiagnostics.Write(
             "planner.raw",

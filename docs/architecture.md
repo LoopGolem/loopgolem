@@ -16,7 +16,7 @@ The current Codex execution architecture follows the principle: expensive intell
 
 1. A mission starts with deterministic workspace inspection and project discovery.
 2. Before agent work, the Worker persists a capability snapshot that distinguishes the Codex agent environment from the deterministic host environment. The initial probe records `git` and `dotnet` availability/version in each environment and is reused after restart.
-3. GPT-6 Luna High runs as a read-only planner. It can inspect the repository, receives the capability snapshot, and returns a structured dependency graph of small tasks.
+3. GPT-6 Luna High opens one persistent read-only Supervisor session for the mission. Its first turn is planning: it can inspect the repository, receives the capability snapshot, and returns a structured dependency graph of small tasks. Later deterministic-recovery turns resume this same Supervisor when available.
 4. Exact mechanical work uses local deterministic operations such as `write_file`, `create_directory`, `rename_path` and direct `run_command` execution on the host.
 5. Tasks requiring implementation judgment run as fresh GPT-6 Luna Low workers in the agent environment. Each worker receives its bounded prompt, explicit read files, explicit write allowlist, acceptance checks and the environment capability snapshot.
 6. LoopGolem verifies that a Luna Low worker did not change files outside its write allowlist.
@@ -50,6 +50,8 @@ Mission capability snapshots are stored separately from the mutable mission snap
 Each mission task has a persisted execution-attempt count, initialized to zero. The count increments before an executor is invoked, and increments again when a task in `Running` or `Retrying` is resumed after a Worker restart. SQLite schema migration adds this persisted state while preserving compatibility with existing databases.
 
 Completed Codex calls also persist token usage on the task: input, cached input, output, optional reasoning output, and total tokens. Usage is accumulated when a task has more than one completed Codex attempt. Deterministic tasks consume no model tokens. The Desktop shows per-task totals and the aggregate mission total.
+
+The mission Supervisor is a persistent `AgentSession` whose provider thread id is captured from `thread.started`. Planning creates it; later recovery turns resume it. If Codex reports that the exact expected provider session no longer exists, the old logical session is invalidated and a replacement Supervisor is seeded from persisted mission/task/capability state. Generic provider failures are not treated as session loss.
 
 Before a Luna Low task begins, LoopGolem persists a Git workspace baseline. If the Worker stops mid-task, the resumed attempt reuses that original baseline and enters `Retrying`, so edits made before the crash cannot disappear into a new baseline. Deterministic `write_file` and `create_directory` operations are naturally replayable. `rename_path` stores enough pre-execution state to recognize a rename that completed before persistence. An interrupted arbitrary `run_command` is not replayed automatically because its side effects may already have occurred; the mission stops in `NeedsHumanAttention`.
 
