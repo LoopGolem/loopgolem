@@ -4,7 +4,7 @@ A mission is a durable user goal. A mission owns an ordered list of persisted ta
 
 Mission states: Created, Planning, Running, WaitingForQuota, WaitingForApproval, Paused, NeedsHumanAttention, Failed, Completed.
 
-Task states: Planned, Ready, Running, Verifying, Retrying, Escalated, Blocked, Failed, Completed.
+Task states: Planned, Ready, Running, Verifying, Retrying, RecoveryPending, Escalated, Blocked, Failed, Completed.
 
 ## Current execution rules
 
@@ -23,7 +23,13 @@ Task states: Planned, Ready, Running, Verifying, Retrying, Escalated, Blocked, F
 13. Mutable tasks persist their execution context before external work begins. An interrupted Luna Low task resumes as `Retrying` against its original Git workspace baseline.
 14. Deterministic `write_file` and `create_directory` operations may be replayed. `rename_path` uses persisted pre-execution state to recognize an already-applied rename.
 15. An interrupted arbitrary `run_command` is not replayed automatically because LoopGolem cannot prove whether side effects already occurred; the mission becomes `NeedsHumanAttention`.
-16. Quota exhaustion is a wait state rather than a mission failure; automatic paid API fallback is forbidden.
+16. A deterministic host process that finishes with a non-zero exit code or a controlled timeout produces a persisted failed task attempt with its full process evidence and may enter `RecoveryPending`. Infrastructure/configuration failures are not treated as code-repair candidates.
+17. Recovery is scoped to the original failed deterministic check. The persistent GPT-6 Luna High Supervisor diagnoses the failure and returns a bounded batch of Luna Low repair tasks. Repair tasks cannot replace, weaken, or redefine the failed check.
+18. After every repair task in the cycle completes, LoopGolem reruns the original deterministic task definition. For .NET verification, the original build target is persisted before the first attempt so recovery cannot silently switch to a different solution/project.
+19. Recovery cycle state is persisted as `Pending -> Planning -> Repairing -> Retrying -> Succeeded`. A failed recheck starts another cycle until `MissionPolicy.MaxRecoveryCycles` is reached; exhaustion escalates the original task and moves the mission to `NeedsHumanAttention`.
+20. Task attempts are persisted independently from task state. On restart, a known persisted deterministic success/failure is reconciled before any replay; attempt numbers are allocated from persisted history so restarts and migrated databases cannot reuse a logical attempt number.
+21. An interrupted arbitrary `run_command` still is not replayed automatically when no completed process outcome was persisted. Recovery never converts an unknown side effect into a blind retry.
+22. Quota exhaustion is a wait state rather than a mission failure; automatic paid API fallback is forbidden.
 
 ## Self-hosting
 
