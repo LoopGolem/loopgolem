@@ -13,13 +13,16 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
     private readonly IMissionStore _store;
     private readonly IReadOnlyDictionary<MissionTaskKind, IMissionTaskExecutor> _executors;
+    private readonly IMissionRecoveryPlanner? _recoveryPlanner;
     private readonly SemaphoreSlim _executionGate = new(1, 1);
 
     public MissionOrchestrator(
         IMissionStore store,
-        IEnumerable<IMissionTaskExecutor> executors)
+        IEnumerable<IMissionTaskExecutor> executors,
+        IMissionRecoveryPlanner? recoveryPlanner = null)
     {
         _store = store;
+        _recoveryPlanner = recoveryPlanner;
         var executorArray = executors.ToArray();
         _executors = executorArray.ToDictionary(executor => executor.Kind);
 
@@ -81,6 +84,10 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 return snapshot;
             }
 
+            await ReconcileCompletedRecoveryCyclesAsync(
+                snapshot,
+                cancellationToken);
+
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -112,6 +119,34 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         cancellationToken);
 
                     return snapshot;
+                }
+
+                var recoveryPending =
+                    incomplete.FirstOrDefault(
+                        task =>
+                            task.Status ==
+                            DomainTaskStatus.RecoveryPending);
+
+                if (recoveryPending is not null)
+                {
+                    var recoveryAdvance =
+                        await AdvanceRecoveryAsync(
+                            snapshot,
+                            recoveryPending,
+                            cancellationToken);
+
+                    snapshot =
+                        recoveryAdvance.Snapshot;
+
+                    if (recoveryAdvance.Terminal)
+                    {
+                        return snapshot;
+                    }
+
+                    if (recoveryAdvance.Reevaluate)
+                    {
+                        continue;
+                    }
                 }
 
                 var failed = incomplete.FirstOrDefault(
@@ -154,6 +189,13 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 var recovering = current.Status is
                     DomainTaskStatus.Running or
                     DomainTaskStatus.Retrying;
+
+                if (recovering)
+                {
+                    await MarkPreviousAttemptInterruptedAsync(
+                        current,
+                        cancellationToken);
+                }
 
                 if (recovering &&
                     IsUnsafeInterruptedRunCommand(current))
@@ -234,6 +276,24 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     snapshot,
                     cancellationToken);
 
+                var attempt = new MissionTaskAttempt(
+                    BuildAttemptId(
+                        running.Id,
+                        running.ExecutionAttemptCount),
+                    running.MissionId,
+                    running.Id,
+                    running.ExecutionAttemptCount,
+                    MissionTaskAttemptOutcome.Running,
+                    null,
+                    null,
+                    null,
+                    startedAt,
+                    null);
+
+                await _store.UpsertTaskAttemptAsync(
+                    attempt,
+                    cancellationToken);
+
                 TaskExecutionResult result;
                 try
                 {
@@ -245,6 +305,20 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 catch (OperationCanceledException)
                     when (cancellationToken.IsCancellationRequested)
                 {
+                    await _store.UpsertTaskAttemptAsync(
+                        attempt with
+                        {
+                            Outcome =
+                                MissionTaskAttemptOutcome.Interrupted,
+                            Summary =
+                                "Task execution was interrupted.",
+                            Error =
+                                "The Worker stopped before the task result was persisted.",
+                            CompletedAtUtc =
+                                DateTimeOffset.UtcNow
+                        },
+                        CancellationToken.None);
+
                     throw;
                 }
                 catch (Exception exception)
@@ -258,6 +332,22 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
                 if (!result.Success)
                 {
+                    var failedAttempt = attempt with
+                    {
+                        Outcome =
+                            MissionTaskAttemptOutcome.Failed,
+                        Summary = result.Summary,
+                        Error =
+                            result.Error ??
+                            result.Summary,
+                        EvidenceJson = result.Details,
+                        CompletedAtUtc = finishedAt
+                    };
+
+                    await _store.UpsertTaskAttemptAsync(
+                        failedAttempt,
+                        CancellationToken.None);
+
                     var failedTask = running with
                     {
                         Status = DomainTaskStatus.Failed,
@@ -266,9 +356,100 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         TokenUsage = CombineTokenUsage(
                             running.TokenUsage,
                             result.TokenUsage),
-                        Error = result.Error ?? result.Summary,
+                        Error =
+                            result.Error ??
+                            result.Summary,
                         UpdatedAtUtc = finishedAt
                     };
+
+                    var repairCycle =
+                        await FindRepairCycleAsync(
+                            snapshot.Mission.Id,
+                            running.Id,
+                            cancellationToken);
+
+                    if (repairCycle is not null)
+                    {
+                        snapshot = ReplaceTask(
+                            snapshot,
+                            failedTask);
+
+                        snapshot = snapshot with
+                        {
+                            Mission = snapshot.Mission with
+                            {
+                                Status =
+                                    MissionStatus.NeedsHumanAttention,
+                                Result =
+                                    $"Recovery repair task '{running.Title}' failed.",
+                                Error = null,
+                                UpdatedAtUtc = finishedAt
+                            }
+                        };
+
+                        await _store.UpdateAsync(
+                            snapshot,
+                            cancellationToken);
+
+                        await _store.UpsertRecoveryCycleAsync(
+                            repairCycle with
+                            {
+                                Status =
+                                    RecoveryCycleStatus.Failed,
+                                UpdatedAtUtc = finishedAt
+                            },
+                            CancellationToken.None);
+
+                        return snapshot;
+                    }
+
+                    if (CanAutomaticallyRecover(
+                            snapshot.Mission,
+                            running,
+                            result))
+                    {
+                        var recoveryTask = failedTask with
+                        {
+                            Status =
+                                DomainTaskStatus.RecoveryPending
+                        };
+
+                        snapshot = ReplaceTask(
+                            snapshot with
+                            {
+                                Mission =
+                                    snapshot.Mission with
+                                    {
+                                        Status =
+                                            MissionStatus.Running,
+                                        Error = null,
+                                        UpdatedAtUtc = finishedAt
+                                    }
+                            },
+                            recoveryTask);
+
+                        await _store.UpdateAsync(
+                            snapshot,
+                            cancellationToken);
+
+                        var recoveryFailure =
+                            await BeginOrContinueRecoveryAsync(
+                                snapshot,
+                                recoveryTask,
+                                failedAttempt,
+                                finishedAt,
+                                cancellationToken);
+
+                        snapshot =
+                            recoveryFailure.Snapshot;
+
+                        if (recoveryFailure.Terminal)
+                        {
+                            return snapshot;
+                        }
+
+                        continue;
+                    }
 
                     snapshot = ReplaceTask(
                         snapshot,
@@ -302,6 +483,18 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     Error = null,
                     UpdatedAtUtc = finishedAt
                 };
+
+                await _store.UpsertTaskAttemptAsync(
+                    attempt with
+                    {
+                        Outcome =
+                            MissionTaskAttemptOutcome.Succeeded,
+                        Summary = result.Summary,
+                        Error = null,
+                        EvidenceJson = result.Details,
+                        CompletedAtUtc = finishedAt
+                    },
+                    CancellationToken.None);
 
                 snapshot = ReplaceTask(
                     snapshot,
@@ -380,6 +573,11 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 await _store.UpdateAsync(
                     snapshot,
                     cancellationToken);
+
+                await MarkRecoverySucceededIfNeededAsync(
+                    completed,
+                    finishedAt,
+                    CancellationToken.None);
             }
         }
         finally
