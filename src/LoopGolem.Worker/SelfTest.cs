@@ -789,11 +789,11 @@ internal static class SelfTest
                 "Verify mission telemetry aggregation.",
                 root,
                 MissionExecutionMode.Codex,
-                MissionStatus.Running,
+                MissionStatus.Completed,
                 null,
                 null,
                 now,
-                now);
+                now.AddSeconds(2));
         var task =
             new MissionTask(
                 taskId,
@@ -996,7 +996,8 @@ internal static class SelfTest
                     role.Role ==
                     AgentSessionRole.Validator);
 
-        if (telemetry.Sessions != 3 ||
+        if (telemetry.DurationMilliseconds != 2000 ||
+            telemetry.Sessions != 3 ||
             telemetry.ActiveSessions != 1 ||
             telemetry.InvalidatedSessions != 1 ||
             telemetry.Turns != 4 ||
