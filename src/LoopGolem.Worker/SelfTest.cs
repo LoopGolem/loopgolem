@@ -1034,8 +1034,13 @@ internal static class SelfTest
                 serialized,
                 JsonOptions);
 
-        if (roundTrip?.Telemetry !=
-                telemetry)
+        if (roundTrip?.Telemetry is null ||
+            JsonSerializer.Serialize(
+                roundTrip.Telemetry,
+                JsonOptions) !=
+            JsonSerializer.Serialize(
+                telemetry,
+                JsonOptions))
         {
             Console.Error.WriteLine(
                 "Self-test mission telemetry IPC round-trip failed.");
