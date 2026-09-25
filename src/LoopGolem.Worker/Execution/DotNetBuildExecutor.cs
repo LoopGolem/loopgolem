@@ -17,7 +17,21 @@ public sealed class DotNetBuildExecutor(
         MissionTask task,
         CancellationToken cancellationToken = default)
     {
-        var target = FindBuildTarget(mission.WorkspacePath);
+        string? target;
+        try
+        {
+            target = FindBuildTarget(mission.WorkspacePath);
+        }
+        catch (Exception exception)
+            when (exception is not OperationCanceledException)
+        {
+            return TaskExecutionResult.Failed(
+                "Could not determine the .NET build target.",
+                exception.Message,
+                failureKind:
+                    TaskFailureKind.InfrastructureFailure);
+        }
+
         if (target is null)
         {
             return TaskExecutionResult.Succeeded(
@@ -28,18 +42,31 @@ public sealed class DotNetBuildExecutor(
             mission.WorkspacePath,
             target);
 
-        var run = await processRunner.RunAsync(
-            "dotnet",
-            [
-                "build",
-                relativeTarget,
-                "--configuration",
-                "Release",
-                "--nologo"
-            ],
-            mission.WorkspacePath,
-            BuildTimeout,
-            cancellationToken);
+        ProcessRunResult run;
+        try
+        {
+            run = await processRunner.RunAsync(
+                "dotnet",
+                [
+                    "build",
+                    relativeTarget,
+                    "--configuration",
+                    "Release",
+                    "--nologo"
+                ],
+                mission.WorkspacePath,
+                BuildTimeout,
+                cancellationToken);
+        }
+        catch (Exception exception)
+            when (exception is not OperationCanceledException)
+        {
+            return TaskExecutionResult.Failed(
+                "Could not start dotnet build.",
+                exception.Message,
+                failureKind:
+                    TaskFailureKind.InfrastructureFailure);
+        }
 
         var details = JsonSerializer.Serialize(run);
 
@@ -48,7 +75,9 @@ public sealed class DotNetBuildExecutor(
             return TaskExecutionResult.Failed(
                 $"dotnet build timed out after {BuildTimeout.TotalMinutes:F0} minutes.",
                 "The .NET build exceeded its timeout.",
-                details);
+                details,
+                failureKind:
+                    TaskFailureKind.KnownDeterministicFailure);
         }
 
         if (run.ExitCode != 0)
@@ -56,7 +85,9 @@ public sealed class DotNetBuildExecutor(
             return TaskExecutionResult.Failed(
                 $"dotnet build failed with exit code {run.ExitCode}.",
                 GetFailureMessage(run),
-                details);
+                details,
+                failureKind:
+                    TaskFailureKind.KnownDeterministicFailure);
         }
 
         return TaskExecutionResult.Succeeded(
