@@ -77,7 +77,8 @@ public sealed record WorkerRequest(
     string? MissionId = null,
     string? Goal = null,
     string? WorkspacePath = null,
-    MissionExecutionMode ExecutionMode = MissionExecutionMode.ValidateOnly);
+    MissionExecutionMode ExecutionMode = MissionExecutionMode.ValidateOnly,
+    SessionReuseMode? SessionReuse = null);
 
 public sealed record WorkerResponse(
     bool Success,
