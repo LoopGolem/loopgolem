@@ -18,4 +18,8 @@ public sealed record MissionTaskAttempt(
     string? Error,
     string? EvidenceJson,
     DateTimeOffset StartedAtUtc,
-    DateTimeOffset? CompletedAtUtc);
+    DateTimeOffset? CompletedAtUtc)
+{
+    public TaskFailureKind FailureKind { get; init; } =
+        TaskFailureKind.None;
+}
