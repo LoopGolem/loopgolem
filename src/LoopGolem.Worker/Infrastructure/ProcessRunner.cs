@@ -20,7 +20,8 @@ public sealed class ProcessRunner
         string workingDirectory,
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
-        string? standardInput = null)
+        string? standardInput = null,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         var argumentList = arguments.ToArray();
 
@@ -45,6 +46,14 @@ public sealed class ProcessRunner
         foreach (var argument in argumentList)
         {
             startInfo.ArgumentList.Add(argument);
+        }
+
+        if (environmentVariables is not null)
+        {
+            foreach (var (key, value) in environmentVariables)
+            {
+                startInfo.Environment[key] = value;
+            }
         }
 
         using var process = new Process
