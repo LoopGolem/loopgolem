@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Text.Json;
+using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
 using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Infrastructure;
@@ -179,11 +180,21 @@ public sealed class WorkerPipeServer(
                         "A valid workspace directory is required.");
                 }
 
+                var policy =
+                    request.SessionReuse is { } sessionReuse
+                        ? MissionPolicy.Default with
+                        {
+                            SessionReuse =
+                                sessionReuse
+                        }
+                        : null;
+
                 var snapshot = await orchestrator.CreateMissionAsync(
                     request.Goal,
                     request.WorkspacePath,
                     request.ExecutionMode,
-                    cancellationToken);
+                    cancellationToken,
+                    policy);
 
                 _ = ExecuteMissionSafelyAsync(snapshot.Mission.Id);
                 return new WorkerResponse(
