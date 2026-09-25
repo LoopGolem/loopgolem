@@ -1635,6 +1635,26 @@ internal static class SelfTest
         }
     }
 
+    private sealed class FakeCapabilityExecutor :
+        IMissionTaskExecutor
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.InspectCapabilities;
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            var snapshot = FakeCapabilitySnapshot();
+
+            return Task.FromResult(
+                TaskExecutionResult.Succeeded(
+                    "Fake capability inspection complete.",
+                    JsonSerializer.Serialize(snapshot)));
+        }
+    }
+
     private sealed class FakePlannerExecutor(
         string baseCommit,
         MissionPlan plan) : IMissionTaskExecutor
