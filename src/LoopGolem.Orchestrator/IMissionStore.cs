@@ -45,6 +45,11 @@ public interface IMissionStore
         string missionId,
         CancellationToken cancellationToken = default);
 
+    Task UpdateWithRecoveryEpisodeAsync(
+        MissionSnapshot snapshot,
+        RecoveryEpisode episode,
+        CancellationToken cancellationToken = default);
+
     Task SaveRecoveryEpisodeAsync(
         RecoveryEpisode episode,
         CancellationToken cancellationToken = default);
