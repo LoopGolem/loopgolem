@@ -171,7 +171,9 @@ internal static class SelfTest
             if (!VerifySelfHostingPrompts(
                     workspace,
                     baseCommit,
-                    fakePlan))
+                    fakePlan) ||
+                !VerifyCapabilityPrompts(
+                    workspace))
             {
                 return 1;
             }
@@ -180,6 +182,7 @@ internal static class SelfTest
             [
                 new WorkspaceInspectionExecutor(),
                 new ProjectDiscoveryExecutor(),
+                new FakeCapabilityExecutor(),
                 new FakePlannerExecutor(
                     baseCommit,
                     fakePlan),
@@ -197,9 +200,10 @@ internal static class SelfTest
                 workspace,
                 MissionExecutionMode.Codex);
 
-            if (created.Tasks.Count != 3 ||
+            if (created.Tasks.Count != 4 ||
                 created.Tasks[0].Status != DomainTaskStatus.Ready ||
-                created.Tasks[2].Kind != MissionTaskKind.PlanMission)
+                created.Tasks[2].Kind != MissionTaskKind.InspectCapabilities ||
+                created.Tasks[3].Kind != MissionTaskKind.PlanMission)
             {
                 Console.Error.WriteLine(
                     "Self-test failed initial planning.");
@@ -219,7 +223,7 @@ internal static class SelfTest
 
             if (completed is null ||
                 completed.Mission.Status != MissionStatus.Completed ||
-                completed.Tasks.Count != 12 ||
+                completed.Tasks.Count != 13 ||
                 completed.Tasks.Any(
                     task =>
                         task.Status != DomainTaskStatus.Completed ||
@@ -227,6 +231,17 @@ internal static class SelfTest
             {
                 Console.Error.WriteLine(
                     "Self-test failed planner/validator mission execution.");
+                return 1;
+            }
+
+            if (completed.Mission.Capabilities is not { } capabilities ||
+                capabilities.FindAgentTool("dotnet") is not
+                    { Available: false } ||
+                capabilities.FindHostTool("dotnet") is not
+                    { Available: true })
+            {
+                Console.Error.WriteLine(
+                    "Self-test did not retain separate agent/host capabilities.");
                 return 1;
             }
 
@@ -268,11 +283,16 @@ internal static class SelfTest
                 created.Mission.Id);
 
             if (persisted is null ||
-                persisted.Tasks.Count != 12 ||
+                persisted.Tasks.Count != 13 ||
                 persisted.Tasks.Count(
                     task =>
                         task.Kind ==
                         MissionTaskKind.ValidateMission) != 2 ||
+                persisted.Mission.Capabilities is not { } persistedCapabilities ||
+                persistedCapabilities.FindAgentTool("dotnet") is not
+                    { Available: false } ||
+                persistedCapabilities.FindHostTool("dotnet") is not
+                    { Available: true } ||
                 persisted.Tasks.Any(
                     task => task.Definition is null) ||
                 persisted.Tasks.Sum(
