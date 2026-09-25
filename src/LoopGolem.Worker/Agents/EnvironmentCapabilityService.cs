@@ -180,9 +180,8 @@ public sealed class EnvironmentCapabilityService(
                 probe.Name,
                 run);
         }
-        catch (Exception exception)
-            when (exception is not
-                OperationCanceledException)
+        catch (Exception)
+            when (!cancellationToken.IsCancellationRequested)
         {
             return new ToolCapability(
                 probe.Name,
@@ -211,9 +210,8 @@ public sealed class EnvironmentCapabilityService(
                 probe.Name,
                 run);
         }
-        catch (Exception exception)
-            when (exception is not
-                OperationCanceledException)
+        catch (Exception)
+            when (!cancellationToken.IsCancellationRequested)
         {
             return new ToolCapability(
                 probe.Name,
@@ -304,7 +302,7 @@ public sealed class EnvironmentCapabilityService(
                 "DETERMINISTIC HOST ENVIRONMENT (where LoopGolem run_command/build checks run)",
                 snapshot.HostEnvironment)}
 
-            Only the tools listed above were probed. An unlisted tool has UNKNOWN availability, not unavailable availability.
+            Only the tools listed above were probed. An unlisted tool has UNKNOWN availability; do not treat it as unavailable.
             """;
     }
 }
