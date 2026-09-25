@@ -46,6 +46,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     definition_json TEXT NULL,
                     execution_context TEXT NULL,
                     execution_attempt_count INTEGER NOT NULL DEFAULT 0,
+                    token_usage_json TEXT NULL,
                     status TEXT NOT NULL,
                     result TEXT NULL,
                     result_details TEXT NULL,
@@ -97,6 +98,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             "mission_tasks",
             "execution_attempt_count",
             "INTEGER NOT NULL DEFAULT 0",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "mission_tasks",
+            "token_usage_json",
+            "TEXT NULL",
             cancellationToken);
 
         await using var indexCommand = connection.CreateCommand();
@@ -318,10 +325,10 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, definition_json, execution_context, execution_attempt_count, status,
+                id, mission_id, sequence, kind, title, definition_json, execution_context, execution_attempt_count, token_usage_json, status,
                 result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $definitionJson, $executionContext, $executionAttemptCount, $status,
+                $id, $missionId, $sequence, $kind, $title, $definitionJson, $executionContext, $executionAttemptCount, $tokenUsageJson, $status,
                 $result, $resultDetails, $error, $createdUtc, $updatedUtc)
             ON CONFLICT(id) DO UPDATE SET
                 sequence = excluded.sequence,
@@ -330,6 +337,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 definition_json = excluded.definition_json,
                 execution_context = excluded.execution_context,
                 execution_attempt_count = excluded.execution_attempt_count,
+                token_usage_json = excluded.token_usage_json,
                 status = excluded.status,
                 result = excluded.result,
                 result_details = excluded.result_details,
@@ -382,7 +390,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         await using var taskCommand = connection.CreateCommand();
         taskCommand.CommandText = """
             SELECT id, mission_id, sequence, kind, title, definition_json, execution_context, status,
-                   result, result_details, error, created_utc, updated_utc, execution_attempt_count
+                   result, result_details, error, created_utc, updated_utc, execution_attempt_count, token_usage_json
             FROM mission_tasks
             WHERE mission_id = $missionId
             ORDER BY sequence;
@@ -414,7 +422,11 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     taskReader.IsDBNull(6)
                         ? null
                         : taskReader.GetString(6),
-                ExecutionAttemptCount = taskReader.GetInt32(13)
+                ExecutionAttemptCount = taskReader.GetInt32(13),
+                TokenUsage = taskReader.IsDBNull(14)
+                    ? null
+                    : JsonSerializer.Deserialize<TokenUsage>(
+                        taskReader.GetString(14))
             });
         }
 
@@ -459,6 +471,11 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             "$executionContext",
             (object?)task.ExecutionContext ?? DBNull.Value);
         command.Parameters.AddWithValue("$executionAttemptCount", task.ExecutionAttemptCount);
+        command.Parameters.AddWithValue(
+            "$tokenUsageJson",
+            task.TokenUsage is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(task.TokenUsage));
         command.Parameters.AddWithValue("$status", task.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)task.Result ?? DBNull.Value);
         command.Parameters.AddWithValue(
