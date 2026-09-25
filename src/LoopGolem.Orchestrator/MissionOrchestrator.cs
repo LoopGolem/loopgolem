@@ -151,10 +151,64 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         cancellationToken);
                 }
 
+                var recovering = current.Status is
+                    DomainTaskStatus.Running or
+                    DomainTaskStatus.Retrying;
+
+                if (recovering &&
+                    IsUnsafeInterruptedRunCommand(current))
+                {
+                    return await MarkMissionNeedsHumanAttentionAsync(
+                        snapshot,
+                        "An interrupted deterministic run_command cannot be automatically replayed because its side effects may already have occurred.",
+                        cancellationToken);
+                }
+
+                string? executionContext =
+                    current.ExecutionContext;
+
+                if (executor is
+                        IMissionTaskExecutionContextProvider contextProvider &&
+                    contextProvider.RequiresExecutionContext(current) &&
+                    string.IsNullOrWhiteSpace(executionContext))
+                {
+                    if (recovering)
+                    {
+                        return await MarkMissionNeedsHumanAttentionAsync(
+                            snapshot,
+                            $"Task '{current.Title}' was interrupted before LoopGolem had a persisted execution baseline.",
+                            cancellationToken);
+                    }
+
+                    try
+                    {
+                        executionContext =
+                            await contextProvider.CreateExecutionContextAsync(
+                                snapshot.Mission,
+                                current,
+                                cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                        when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception)
+                    {
+                        return await MarkMissionFailedAsync(
+                            snapshot,
+                            $"Could not prepare task '{current.Title}' for crash-safe execution: {exception.Message}",
+                            cancellationToken);
+                    }
+                }
+
                 var startedAt = DateTimeOffset.UtcNow;
                 var running = current with
                 {
-                    Status = DomainTaskStatus.Running,
+                    Status = recovering
+                        ? DomainTaskStatus.Retrying
+                        : DomainTaskStatus.Running,
+                    ExecutionContext = executionContext,
                     Error = null,
                     UpdatedAtUtc = startedAt
                 };
@@ -823,6 +877,38 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
         return true;
     }
+
+    private async Task<MissionSnapshot>
+        MarkMissionNeedsHumanAttentionAsync(
+            MissionSnapshot snapshot,
+            string reason,
+            CancellationToken cancellationToken)
+    {
+        snapshot = snapshot with
+        {
+            Mission = snapshot.Mission with
+            {
+                Status = MissionStatus.NeedsHumanAttention,
+                Result = reason,
+                Error = null,
+                UpdatedAtUtc = DateTimeOffset.UtcNow
+            }
+        };
+
+        await _store.UpdateAsync(
+            snapshot,
+            cancellationToken);
+
+        return snapshot;
+    }
+
+    private static bool IsUnsafeInterruptedRunCommand(
+        MissionTask task) =>
+        task.Kind == MissionTaskKind.DeterministicWork &&
+        task.Definition?.Executor ==
+            PlannedExecutorKinds.Deterministic &&
+        task.Definition.Deterministic.Kind ==
+            DeterministicOperationKinds.RunCommand;
 
     private async Task<MissionSnapshot>
         MarkMissionFailedAsync(
