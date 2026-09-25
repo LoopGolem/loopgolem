@@ -559,7 +559,9 @@ internal static class SelfTest
                 "thread-123");
 
         var resumeIndex =
-            resumed.IndexOf("resume");
+            FindArgumentIndex(
+                resumed,
+                "resume");
 
         if (resumed.Contains("--ephemeral") ||
             resumeIndex < 0 ||
@@ -587,6 +589,23 @@ internal static class SelfTest
         }
 
         return true;
+    }
+
+    private static int FindArgumentIndex(
+        IReadOnlyList<string> arguments,
+        string value)
+    {
+        for (var index = 0;
+             index < arguments.Count;
+             index++)
+        {
+            if (arguments[index] == value)
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private static bool ContainsArgumentPair(
