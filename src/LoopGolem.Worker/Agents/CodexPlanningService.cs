@@ -9,6 +9,12 @@ public sealed class CodexPlanningService(
     ProcessRunner processRunner,
     CodexCliService runtime)
 {
+    private sealed record StructuredRunResult(
+        ProcessRunResult Process,
+        string FinalMessage,
+        string Details,
+        TokenUsage? TokenUsage);
+
     public const string PlannerModel = "gpt-6-luna";
     public const string PlannerReasoning = "high";
     public const string WorkerModel = "gpt-6-luna";
@@ -74,7 +80,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Planner timed out.",
                 "GPT-6 Luna High exceeded the planner timeout.",
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         if (run.Process.ExitCode != 0)
@@ -82,7 +88,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 $"Planner exited with code {run.Process.ExitCode}.",
                 GetProcessError(run.Process),
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         MissionPlan? plan;
@@ -97,7 +103,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Planner returned invalid JSON.",
                 exception.Message,
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         if (plan is null)
@@ -105,7 +111,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Planner returned no mission plan.",
                 "The structured planner response was empty.",
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         var validationError = MissionPlanValidator.Validate(plan);
@@ -114,7 +120,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Planner returned an invalid mission plan.",
                 validationError,
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         return TaskExecutionResult.Succeeded(
@@ -205,7 +211,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Validator timed out.",
                 "GPT-6 Luna High exceeded the validator timeout.",
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         if (run.Process.ExitCode != 0)
@@ -213,7 +219,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 $"Validator exited with code {run.Process.ExitCode}.",
                 GetProcessError(run.Process),
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         ValidationResult? result;
@@ -228,7 +234,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Validator returned invalid JSON.",
                 exception.Message,
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         if (result is null ||
@@ -237,7 +243,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Validator returned an unsupported result.",
                 result?.Status ?? "The structured result was empty.",
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         if (result.Status == "ok" && result.Tasks.Count != 0)
@@ -245,7 +251,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Validator returned correction tasks with status ok.",
                 "An ok validation must return an empty task list.",
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         if (result.Status == "not_ok")
@@ -256,7 +262,7 @@ public sealed class CodexPlanningService(
                 return TaskExecutionResult.Failed(
                     "Validator returned an invalid correction plan.",
                     taskError,
-                    run.Details);
+                    run.Details, run.TokenUsage);
             }
 
             if (result.Tasks.Count == 0)
@@ -264,7 +270,7 @@ public sealed class CodexPlanningService(
                 return TaskExecutionResult.Failed(
                     "Validator returned not_ok without correction tasks.",
                     "At least one correction task is required.",
-                    run.Details);
+                    run.Details, run.TokenUsage);
             }
 
             var expectedPrefix = $"fix{context.Cycle}_";
@@ -277,7 +283,7 @@ public sealed class CodexPlanningService(
                 return TaskExecutionResult.Failed(
                     "Validator returned correction ids outside the required namespace.",
                     $"Every correction id in cycle {context.Cycle} must start with '{expectedPrefix}'.",
-                    run.Details);
+                    run.Details, run.TokenUsage);
             }
         }
 
@@ -358,7 +364,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Luna Low microtask timed out.",
                 "The microtask exceeded the one-hour timeout.",
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         if (run.Process.ExitCode != 0)
@@ -366,7 +372,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 $"Luna Low exited with code {run.Process.ExitCode}.",
                 GetProcessError(run.Process),
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         CodexAgentOutcome? outcome;
@@ -381,7 +387,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Luna Low returned invalid structured output.",
                 exception.Message,
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         if (outcome is null)
@@ -389,7 +395,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Luna Low returned no structured output.",
                 "The final response was empty.",
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         GitWorkspaceSnapshot after;
@@ -405,7 +411,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Could not verify the workspace after the microtask.",
                 exception.Message,
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         var changedByTask = after.ChangesSince(before);
@@ -425,7 +431,7 @@ public sealed class CodexPlanningService(
             return TaskExecutionResult.Failed(
                 "Luna Low modified files outside its write allowlist.",
                 string.Join(", ", violations),
-                run.Details);
+                run.Details, run.TokenUsage);
         }
 
         return outcome.Outcome switch
@@ -435,25 +441,25 @@ public sealed class CodexPlanningService(
                 string.IsNullOrWhiteSpace(outcome.Blocker)
                     ? "Luna Low reported a blocker."
                     : outcome.Blocker,
-                run.Details),
+                run.Details, run.TokenUsage),
             "changed" when changedByTask.Count == 0 =>
                 TaskExecutionResult.Failed(
                     "Luna Low reported changes, but no file changed.",
                     "The structured result disagrees with deterministic Git verification.",
-                    run.Details),
+                    run.Details, run.TokenUsage),
             "changed" => TaskExecutionResult.Succeeded(
                 outcome.Summary,
-                run.Details),
+                run.Details, run.TokenUsage),
             "already_satisfied"
                 when changedByTask.Count > 0 &&
                      task.Status != LoopGolem.Core.Domain.TaskStatus.Retrying =>
                 TaskExecutionResult.Failed(
                     "Luna Low reported no edit was needed, but files changed.",
                     string.Join(", ", changedByTask),
-                    run.Details),
+                    run.Details, run.TokenUsage),
             "already_satisfied" => TaskExecutionResult.Succeeded(
                 outcome.Summary,
-                run.Details),
+                run.Details, run.TokenUsage),
             _ => TaskExecutionResult.Failed(
                 "Luna Low returned an unsupported outcome.",
                 outcome.Outcome,
@@ -461,7 +467,7 @@ public sealed class CodexPlanningService(
         };
     }
 
-    private async Task<(ProcessRunResult Process, string FinalMessage, string Details)>
+    private async Task<StructuredRunResult>
         RunStructuredAsync(
             string workspace,
             string model,
@@ -542,15 +548,23 @@ public sealed class CodexPlanningService(
                 ? await File.ReadAllTextAsync(outputPath, cancellationToken)
                 : string.Empty;
 
+            var tokenUsage = ParseTokenUsage(
+                process.StandardOutput);
+
             var details = JsonSerializer.Serialize(new
             {
                 model,
                 reasoning,
                 sandbox,
+                tokenUsage,
                 process
             });
 
-            return (process, finalMessage.Trim(), details);
+            return new StructuredRunResult(
+                process,
+                finalMessage.Trim(),
+                details,
+                tokenUsage);
         }
         finally
         {
@@ -573,6 +587,7 @@ public sealed class CodexPlanningService(
         string outputPath) =>
         [
             "exec",
+            "--json",
             "--ephemeral",
             "--ignore-user-config",
             "--disable", "apps",
@@ -589,6 +604,152 @@ public sealed class CodexPlanningService(
             "--output-last-message", outputPath,
             "-"
         ];
+
+    internal static TokenUsage? ParseTokenUsage(
+        string jsonLines)
+    {
+        TokenUsage? latest = null;
+
+        foreach (var line in jsonLines.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries |
+                     StringSplitOptions.TrimEntries))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+
+                if (TryGetUsageElement(
+                        root,
+                        out var usage))
+                {
+                    latest = ParseUsageElement(usage);
+                }
+            }
+            catch (JsonException)
+            {
+                // Ignore non-JSON diagnostics. The structured Codex stream
+                // may coexist with launcher output on some runtimes.
+            }
+        }
+
+        return latest;
+    }
+
+    private static bool TryGetUsageElement(
+        JsonElement root,
+        out JsonElement usage)
+    {
+        if (root.TryGetProperty("type", out var type) &&
+            type.ValueKind == JsonValueKind.String &&
+            string.Equals(
+                type.GetString(),
+                "turn.completed",
+                StringComparison.Ordinal) &&
+            root.TryGetProperty("usage", out usage) &&
+            usage.ValueKind == JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        if (root.TryGetProperty("msg", out var message) &&
+            TryGetLegacyTokenUsage(
+                message,
+                out usage))
+        {
+            return true;
+        }
+
+        if (root.TryGetProperty("payload", out var payload) &&
+            TryGetLegacyTokenUsage(
+                payload,
+                out usage))
+        {
+            return true;
+        }
+
+        usage = default;
+        return false;
+    }
+
+    private static bool TryGetLegacyTokenUsage(
+        JsonElement container,
+        out JsonElement usage)
+    {
+        if (container.ValueKind == JsonValueKind.Object &&
+            container.TryGetProperty("type", out var type) &&
+            type.ValueKind == JsonValueKind.String &&
+            string.Equals(
+                type.GetString(),
+                "token_count",
+                StringComparison.Ordinal) &&
+            container.TryGetProperty("info", out var info) &&
+            info.ValueKind == JsonValueKind.Object)
+        {
+            if (info.TryGetProperty(
+                    "last_token_usage",
+                    out usage) &&
+                usage.ValueKind == JsonValueKind.Object)
+            {
+                return true;
+            }
+
+            if (info.TryGetProperty(
+                    "total_token_usage",
+                    out usage) &&
+                usage.ValueKind == JsonValueKind.Object)
+            {
+                return true;
+            }
+        }
+
+        usage = default;
+        return false;
+    }
+
+    private static TokenUsage ParseUsageElement(
+        JsonElement usage)
+    {
+        var input = GetTokenCount(
+            usage,
+            "input_tokens");
+        var cachedInput = GetTokenCount(
+            usage,
+            "cached_input_tokens");
+        var output = GetTokenCount(
+            usage,
+            "output_tokens");
+        var reasoningOutput = GetTokenCount(
+            usage,
+            "reasoning_output_tokens");
+        var total = GetTokenCount(
+            usage,
+            "total_tokens");
+
+        if (total == 0)
+        {
+            total = checked(input + output);
+        }
+
+        return new TokenUsage(
+            input,
+            cachedInput,
+            output,
+            reasoningOutput,
+            total);
+    }
+
+    private static long GetTokenCount(
+        JsonElement usage,
+        string propertyName) =>
+        usage.TryGetProperty(
+            propertyName,
+            out var value) &&
+        value.ValueKind == JsonValueKind.Number &&
+        value.TryGetInt64(out var count)
+            ? count
+            : 0;
 
     internal static string BuildPlannerPrompt(Mission mission) =>
         $"""
