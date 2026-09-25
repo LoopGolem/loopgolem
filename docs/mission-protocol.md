@@ -12,7 +12,7 @@ Task states: Planned, Ready, Running, Verifying, Retrying, RecoveryPending, Esca
 2. GPT-6 Luna High planning returns a validated dependency graph of deterministic and Luna Low microtasks.
 3. A Planned task becomes Ready only when all of its declared dependencies are Completed.
 4. The current executor runs tasks sequentially even when the dependency graph could permit parallel work; parallel scheduling is future work.
-5. Luna Low tasks are bounded by explicit read/write files and LoopGolem verifies their actual changed-file set.
+5. Luna Low tasks are bounded by explicit read/write files and LoopGolem verifies their actual changed-file set. Transport context may be reused across strongly related sequential Luna Low tasks, but the tasks remain independent persisted units.
 6. After each implementation batch, deterministic Git inspection and available local .NET build verification run before final validation.
 7. LoopGolem creates an unreachable Git snapshot commit without moving the user's branch or real index.
 8. GPT-6 Luna High validates the original goal against the immutable base-to-snapshot diff.
@@ -29,7 +29,10 @@ Task states: Planned, Ready, Running, Verifying, Retrying, RecoveryPending, Esca
 19. Recovery cycle state is persisted as `Pending -> Planning -> Repairing -> Retrying -> Succeeded`. A failed recheck starts another cycle until `MissionPolicy.MaxRecoveryCycles` is reached; exhaustion escalates the original task and moves the mission to `NeedsHumanAttention`.
 20. Task attempts are persisted independently from task state. On restart, a known persisted deterministic success/failure is reconciled before any replay; attempt numbers are allocated from persisted history so restarts and migrated databases cannot reuse a logical attempt number.
 21. An interrupted arbitrary `run_command` still is not replayed automatically when no completed process outcome was persisted. Recovery never converts an unknown side effect into a blind retry.
-22. Quota exhaustion is a wait state rather than a mission failure; automatic paid API fallback is forbidden.
+22. Worker-session affinity requires both a positive Low context hint and deterministic graph/path affinity. A persisted lease prevents a Worker session from being reused concurrently; stale leases after restart invalidate that session.
+23. Worker context reuse is bounded by mission policy. The default is 3 accepted microtasks per persistent Low session, 30 idle minutes and 4 active Worker sessions. `SessionReuseMode.Disabled` forces fresh ephemeral Low calls for benchmark/control use.
+24. A Worker turn is reusable only after its owning mission task is durably `Completed`. Rejected work, unknown/incomplete turns and uncommitted prior tasks never donate context to another task.
+25. Quota exhaustion is a wait state rather than a mission failure; automatic paid API fallback is forbidden.
 
 ## Self-hosting
 
