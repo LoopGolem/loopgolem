@@ -17,7 +17,7 @@
         <TextBlock x:Name="SubtitleText" Opacity="0.72" TextWrapping="Wrap" />
       </StackPanel>
 
-      <Grid Grid.Row="2" ColumnDefinitions="Auto,8,Auto,28,Auto,8,Auto,*,Auto">
+      <Grid Grid.Row="2" ColumnDefinitions="Auto,8,Auto,28,Auto,8,Auto,*,Auto,16,Auto">
         <TextBlock x:Name="WorkerLabel" Grid.Column="0" FontWeight="SemiBold" />
         <TextBlock x:Name="WorkerStatusText" Grid.Column="2" />
         <TextBlock x:Name="CodexLabel" Grid.Column="4" FontWeight="SemiBold" />
@@ -26,6 +26,12 @@
             x:Name="UseCodexCheckBox"
             Grid.Column="8"
             VerticalAlignment="Center"
+            IsEnabled="False" />
+        <CheckBox
+            x:Name="ReuseLowContextCheckBox"
+            Grid.Column="10"
+            VerticalAlignment="Center"
+            IsChecked="True"
             IsEnabled="False" />
       </Grid>
 
