@@ -396,6 +396,9 @@ public sealed class CodexSessionTransport(
         }
 
         var now = DateTimeOffset.UtcNow;
+        var isEphemeral =
+            request.SessionMode ==
+            CodexSessionMode.FreshEphemeral;
         var session = new AgentSession(
             Guid.NewGuid().ToString("N"),
             request.MissionId,
@@ -403,11 +406,15 @@ public sealed class CodexSessionTransport(
             request.Model,
             request.ReasoningEffort,
             null,
-            AgentSessionStatus.Active,
+            isEphemeral
+                ? AgentSessionStatus.Closed
+                : AgentSessionStatus.Active,
             null,
             0,
             0,
-            null,
+            isEphemeral
+                ? "ephemeral"
+                : null,
             now,
             now,
             now);
