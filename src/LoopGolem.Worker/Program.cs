@@ -48,7 +48,11 @@ IMissionTaskExecutor[] executors =
     new DotNetBuildExecutor(processRunner)
 ];
 
-var orchestrator = new MissionOrchestrator(store, executors);
+var orchestrator =
+    new MissionOrchestrator(
+        store,
+        executors,
+        planning);
 
 using var shutdown = new CancellationTokenSource();
 
