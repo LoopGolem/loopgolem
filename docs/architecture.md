@@ -46,6 +46,8 @@ SQLite uses WAL mode. UI clients do not open the database directly. Planner task
 
 Each mission task has a persisted execution-attempt count, initialized to zero. The count increments before an executor is invoked, and increments again when a task in `Running` or `Retrying` is resumed after a Worker restart. SQLite schema migration adds this persisted state while preserving compatibility with existing databases.
 
+Completed Codex calls also persist token usage on the task: input, cached input, output, optional reasoning output, and total tokens. Usage is accumulated when a task has more than one completed Codex attempt. Deterministic tasks consume no model tokens. The Desktop shows per-task totals and the aggregate mission total.
+
 Before a Luna Low task begins, LoopGolem persists a Git workspace baseline. If the Worker stops mid-task, the resumed attempt reuses that original baseline and enters `Retrying`, so edits made before the crash cannot disappear into a new baseline. Deterministic `write_file` and `create_directory` operations are naturally replayable. `rename_path` stores enough pre-execution state to recognize a rename that completed before persistence. An interrupted arbitrary `run_command` is not replayed automatically because its side effects may already have occurred; the mission stops in `NeedsHumanAttention`.
 
 ## IPC
