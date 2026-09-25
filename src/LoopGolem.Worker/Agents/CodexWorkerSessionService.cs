@@ -569,13 +569,23 @@ public sealed class CodexWorkerSessionService(
     }
 
     private static string NormalizePath(
-        string path) =>
-        path.Replace(
+        string path)
+    {
+        var normalized =
+            path.Replace(
                 '\\',
-                '/')
-            .TrimStart(
-                '.',
                 '/');
+
+        while (normalized.StartsWith(
+                   "./",
+                   StringComparison.Ordinal))
+        {
+            normalized =
+                normalized[2..];
+        }
+
+        return normalized.TrimStart('/');
+    }
 
     private static bool ShareDirectory(
         IEnumerable<string> first,
@@ -724,19 +734,34 @@ public sealed class CodexWorkerSessionService(
             return;
         }
 
-        var protectedIds =
+        var keep =
+            active.FirstOrDefault(
+                session =>
+                    session.Id ==
+                    keepSessionId);
+        var retained =
             active
-                .Take(limit)
+                .Where(session =>
+                    session.Id !=
+                        keepSessionId)
+                .Take(
+                    Math.Max(
+                        0,
+                        limit - (keep is null ? 0 : 1)))
                 .Select(session =>
                     session.Id)
                 .ToHashSet(
                     StringComparer.Ordinal);
-        protectedIds.Add(
-            keepSessionId);
+
+        if (keep is not null)
+        {
+            retained.Add(
+                keep.Id);
+        }
 
         foreach (var session in active)
         {
-            if (protectedIds.Contains(
+            if (retained.Contains(
                     session.Id))
             {
                 continue;
