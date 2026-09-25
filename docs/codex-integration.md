@@ -64,9 +64,11 @@ The snapshot is persisted once per mission and reused across Worker restarts ins
 
 Planner, Luna Low and Validator prompts receive the snapshot. The planner must not assign a known-unavailable agent tool to Luna Low or place a host-only command in a Luna Low acceptance check. If a required check is available on the deterministic host but unavailable in the agent environment, the planner should schedule deterministic host verification instead. Luna Low and Validator are explicitly told not to retry known-unavailable agent tools.
 
-## Planner
+## Planner / Supervisor
 
-The planner runs read-only with repository-wide visibility. Its hidden contract requires a structured plan of small dependency-aware tasks containing precise read files, write files and acceptance checks.
+The planner is the first turn of the mission's persistent GPT-6 Luna High Supervisor. It runs read-only with repository-wide visibility. Its hidden contract requires a structured plan of small dependency-aware tasks containing precise read files, write files and acceptance checks.
+
+Keeping this thread alive preserves planning context for later deterministic-failure diagnosis without merging task semantics. Each later Supervisor turn still has its own persisted `agent_turns` record and token telemetry.
 
 The planner chooses between:
 
@@ -79,13 +81,15 @@ A self-hosting rule warns the planner that the currently running LoopGolem Worke
 
 LoopGolem has three explicit Codex CLI transport modes:
 
-- `FreshEphemeral`: starts a new `codex exec --ephemeral` thread. This remains the active mode for planner, worker and validator calls until session reuse is enabled by a later orchestration step.
+- `FreshEphemeral`: starts a new `codex exec --ephemeral` thread.
 - `NewPersistent`: starts a new non-ephemeral Codex thread. When the JSONL stream emits `thread.started`, LoopGolem persists the provider thread id immediately instead of waiting for the Codex process to exit.
 - `Resume`: resumes a previously persisted provider thread with `codex exec ... resume <thread-id> -`. The logical LoopGolem session must still be active and its role, model and reasoning effort must match the requested turn.
 
 The transport reads JSONL stdout incrementally. Persistent thread identity is therefore crash-safe once `thread.started` has been observed. Completed turns persist duration and token dimensions in `agent_turns`.
 
-This transport support does not by itself enable context reuse. The current orchestration policy still sends planner, Luna Low worker and validator calls through `FreshEphemeral`; persistent Supervisor/Worker session selection is implemented separately so it can be benchmarked as an independent variable.
+Planner now runs as the first turn of one persistent **Supervisor** session per mission. Future deterministic-recovery turns use the same Supervisor through `Resume`. Luna Low workers and the final Validator remain fresh/independent at this stage; their own reuse policies are later steps so those variables stay isolated.
+
+If a Supervisor resume fails with the Codex CLI's explicit `Session not found: <expected-thread-id>` error, LoopGolem invalidates that logical session with reason `provider_session_not_found`, reconstructs mission context from persisted mission/task/capability state, and starts a replacement persistent Supervisor. Other errors such as quota/auth/transient failures do not trigger a session reset. An active Supervisor with no persisted provider thread id, a model/reasoning mismatch, or a duplicate active Supervisor is also invalidated deterministically before selection.
 
 ## Luna Low workers
 
