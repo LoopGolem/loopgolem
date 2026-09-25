@@ -1,0 +1,43 @@
+Create a complete .NET 10 command-line application named TaskForge in this empty directory.
+
+TaskForge is a local persistent task manager.
+
+Requirements:
+
+- Use only the .NET 10 standard library. Do not add external NuGet dependencies.
+- Create a solution and appropriate projects/files.
+- Persist tasks locally as JSON.
+- Support these commands:
+  - add <title>
+  - list
+  - show <id>
+  - complete <id>
+  - reopen <id>
+  - delete <id>
+  - tag <id> <tag>
+  - untag <id> <tag>
+  - search <text>
+- Every task must have:
+  - numeric stable id
+  - title
+  - completed state
+  - zero or more tags
+  - UTC creation timestamp
+  - optional UTC completion timestamp
+- "list" must support:
+  - --all
+  - --open
+  - --completed
+  - --tag <tag>
+- IDs must never be reused after deletion.
+- Writes must be crash-safe: do not leave a partially written JSON database if saving fails.
+- Invalid commands and invalid IDs must produce useful errors and a non-zero exit code.
+- The application must work on Windows and Linux.
+- Keep domain/persistence/CLI responsibilities reasonably separated.
+- Include a README with build and usage examples.
+- Include a deterministic self-test mechanism that requires no third-party test framework and verifies the important behavior, including persistence across process/application instances.
+- Build the final solution and run the self-tests.
+- Fix any failures you encounter.
+- Do not commit or push anything to Git.
+
+The final result should be a finished, runnable project, not merely a scaffold.
