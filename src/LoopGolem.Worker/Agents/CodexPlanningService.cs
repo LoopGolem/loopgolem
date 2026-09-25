@@ -738,6 +738,9 @@ public sealed class CodexPlanningService(
         FAILED TASK:
         {JsonSerializer.Serialize(failedTask.Definition, JsonOptions)}
 
+        FAILED TASK EXECUTION CONTEXT:
+        {failedTask.ExecutionContext ?? "(none)"}
+
         FAILURE SUMMARY:
         {failureAttempt.Summary ?? failedTask.Result ?? "(none)"}
 
