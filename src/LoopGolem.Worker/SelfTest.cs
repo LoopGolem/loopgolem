@@ -102,6 +102,11 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!VerifyTokenUsageParsing())
+            {
+                return 1;
+            }
+
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
@@ -326,6 +331,29 @@ internal static class SelfTest
         return run.ExitCode == 0 && !run.TimedOut
             ? run.StandardOutput.Trim()
             : null;
+    }
+
+    private static bool VerifyTokenUsageParsing()
+    {
+        const string modernJson =
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
+
+        var usage = CodexPlanningService.ParseTokenUsage(
+            modernJson);
+
+        if (usage is null ||
+            usage.InputTokens != 100 ||
+            usage.CachedInputTokens != 40 ||
+            usage.OutputTokens != 20 ||
+            usage.ReasoningOutputTokens != 5 ||
+            usage.TotalTokens != 120)
+        {
+            Console.Error.WriteLine(
+                "Self-test could not parse Codex token usage.");
+            return false;
+        }
+
+        return true;
     }
 
     private static async Task<bool> VerifyGitChangeCountingAsync(
