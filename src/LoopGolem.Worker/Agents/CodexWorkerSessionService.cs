@@ -1,5 +1,6 @@
 using LoopGolem.Core.Domain;
 using LoopGolem.Orchestrator;
+using DomainTaskStatus = LoopGolem.Core.Domain.TaskStatus;
 
 namespace LoopGolem.Worker.Agents;
 
@@ -365,7 +366,7 @@ public sealed class CodexWorkerSessionService(
                         latestTurn.TaskId);
 
             if (previousTask?.Status !=
-                    TaskStatus.Completed ||
+                    DomainTaskStatus.Completed ||
                 previousTask.Definition is null ||
                 currentTask.Definition is null)
             {
@@ -508,7 +509,7 @@ public sealed class CodexWorkerSessionService(
                 intervening.Sequence >=
                     currentTask.Sequence ||
                 intervening.Status !=
-                    TaskStatus.Completed ||
+                    DomainTaskStatus.Completed ||
                 intervening.Definition is null)
             {
                 continue;
