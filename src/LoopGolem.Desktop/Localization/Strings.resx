@@ -86,4 +86,5 @@
   <data name="WorkerContext" xml:space="preserve"><value>Worker context</value></data>
   <data name="Affinity" xml:space="preserve"><value>Affinity</value></data>
   <data name="FreshPerTask" xml:space="preserve"><value>Fresh per task</value></data>
+  <data name="Elapsed" xml:space="preserve"><value>Elapsed</value></data>
 </root>
