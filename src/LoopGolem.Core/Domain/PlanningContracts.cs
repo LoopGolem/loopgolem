@@ -50,6 +50,7 @@ public sealed record PlannerResult(
 public sealed record ValidatorContext(
     string BaseCommit,
     MissionPlan Plan,
+    IReadOnlyList<PlannedTask> CorrectionHistory,
     int Cycle);
 
 public sealed record ValidationResult(
@@ -87,7 +88,7 @@ public static class MissionPlanValidator
         foreach (var task in tasks)
         {
             if (string.IsNullOrWhiteSpace(task.Id) ||
-                ReservedIds.Contains(task.Id) ||
+                IsReservedId(task.Id) ||
                 !ids.Add(task.Id))
             {
                 return $"Planner returned an invalid or duplicate task id '{task.Id}'.";
@@ -164,6 +165,12 @@ public static class MissionPlanValidator
             .Split('/', StringSplitOptions.RemoveEmptyEntries)
             .Any(segment => segment == "..");
     }
+
+    private static bool IsReservedId(string id) =>
+        ReservedIds.Contains(id) ||
+        id.StartsWith("inspect-git-", StringComparison.Ordinal) ||
+        id.StartsWith("build-dotnet-", StringComparison.Ordinal) ||
+        id.StartsWith("validate-", StringComparison.Ordinal);
 
     private static string? ValidateDeterministic(PlannedTask task)
     {

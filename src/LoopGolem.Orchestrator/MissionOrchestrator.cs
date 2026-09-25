@@ -470,6 +470,7 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             dependencies,
             result.BaseCommit,
             result.Plan,
+            [],
             cycle: 1,
             now);
 
@@ -646,6 +647,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             dependencies,
             validatorContext.BaseCommit,
             validatorContext.Plan,
+            validatorContext.CorrectionHistory
+                .Concat(corrections)
+                .ToArray(),
             validatorContext.Cycle + 1,
             now);
 
@@ -667,6 +671,7 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         IReadOnlyList<string> dependencies,
         string baseCommit,
         MissionPlan plan,
+        IReadOnlyList<PlannedTask> correctionHistory,
         int cycle,
         DateTimeOffset now)
     {
@@ -707,6 +712,7 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     [buildId],
                     baseCommit,
                     plan,
+                    correctionHistory,
                     cycle),
                 now));
     }
@@ -903,6 +909,7 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         IReadOnlyList<string> dependsOn,
         string baseCommit,
         MissionPlan plan,
+        IReadOnlyList<PlannedTask> correctionHistory,
         int cycle) =>
         new(
             id,
@@ -912,6 +919,7 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 new ValidatorContext(
                     baseCommit,
                     plan,
+                    correctionHistory,
                     cycle),
                 JsonOptions),
             [],

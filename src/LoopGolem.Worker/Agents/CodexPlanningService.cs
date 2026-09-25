@@ -257,6 +257,19 @@ public sealed class CodexPlanningService(
                     "At least one correction task is required.",
                     run.Details);
             }
+
+            var expectedPrefix = $"fix{context.Cycle}_";
+            if (result.Tasks.Any(
+                    correction =>
+                        !correction.Id.StartsWith(
+                            expectedPrefix,
+                            StringComparison.Ordinal)))
+            {
+                return TaskExecutionResult.Failed(
+                    "Validator returned correction ids outside the required namespace.",
+                    $"Every correction id in cycle {context.Cycle} must start with '{expectedPrefix}'.",
+                    run.Details);
+            }
         }
 
         return TaskExecutionResult.Succeeded(
@@ -600,6 +613,9 @@ public sealed class CodexPlanningService(
 
         ORIGINAL PLAN:
         {planJson}
+
+        PRIOR CORRECTION TASKS:
+        {JsonSerializer.Serialize(context.CorrectionHistory, JsonOptions)}
 
         BASE COMMIT:
         {context.BaseCommit}
