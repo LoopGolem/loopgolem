@@ -96,6 +96,8 @@ Codex missions require a clean Git working tree before planning begins. This avo
 
 A zero Codex exit code is never accepted as proof by itself. LoopGolem additionally checks structured responses, changed-file allowlists, Git diff validity, local builds when applicable, and final Luna High validation.
 
+Before each Luna Low call, LoopGolem persists a Git workspace baseline in mission state. If the Worker is interrupted, the next attempt reuses that same baseline rather than recapturing the partially modified workspace. This keeps write-allowlist verification meaningful across process restarts.
+
 ## Future direction
 
 The integration can later move to Codex app-server or the official SDK for richer streaming, lifecycle control, quota telemetry and resumable sessions without changing mission semantics.
