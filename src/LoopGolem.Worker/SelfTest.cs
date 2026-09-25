@@ -189,7 +189,8 @@ internal static class SelfTest
                 completed.Tasks.Count != 12 ||
                 completed.Tasks.Any(
                     task =>
-                        task.Status != DomainTaskStatus.Completed))
+                        task.Status != DomainTaskStatus.Completed ||
+                        task.ExecutionAttemptCount != 1))
             {
                 Console.Error.WriteLine(
                     "Self-test failed planner/validator mission execution.");
@@ -602,7 +603,8 @@ internal static class SelfTest
             interruptedTask.Status !=
                 DomainTaskStatus.Running ||
             interruptedTask.ExecutionContext !=
-                PreparedRecoveryContext)
+                PreparedRecoveryContext ||
+            interruptedTask.ExecutionAttemptCount != 1)
         {
             Console.Error.WriteLine(
                 "Self-test did not persist the pre-execution recovery context.");
@@ -633,10 +635,33 @@ internal static class SelfTest
                 task =>
                     task.Kind ==
                     MissionTaskKind.AgentWork).Status !=
-                DomainTaskStatus.Completed)
+                DomainTaskStatus.Completed ||
+            completed.Tasks.First(
+                task =>
+                    task.Kind ==
+                    MissionTaskKind.AgentWork).ExecutionAttemptCount != 2)
         {
             Console.Error.WriteLine(
                 "Self-test did not resume the interrupted prepared task.");
+            return false;
+        }
+
+        var recoveredStore = new SqliteMissionStore(database);
+        await recoveredStore.InitializeAsync();
+
+        var recoveredSnapshot = await recoveredStore.GetAsync(
+            created.Mission.Id);
+        var recoveredTask = recoveredSnapshot?.Tasks.FirstOrDefault(
+            task =>
+                task.Kind ==
+                MissionTaskKind.AgentWork);
+
+        if (recoveredTask is null ||
+            recoveredTask.Status != DomainTaskStatus.Completed ||
+            recoveredTask.ExecutionAttemptCount != 2)
+        {
+            Console.Error.WriteLine(
+                "Self-test did not persist the recovered task attempt count.");
             return false;
         }
 

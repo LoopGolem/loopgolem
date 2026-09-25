@@ -209,6 +209,8 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         ? DomainTaskStatus.Retrying
                         : DomainTaskStatus.Running,
                     ExecutionContext = executionContext,
+                    ExecutionAttemptCount = checked(
+                        current.ExecutionAttemptCount + 1),
                     Error = null,
                     UpdatedAtUtc = startedAt
                 };

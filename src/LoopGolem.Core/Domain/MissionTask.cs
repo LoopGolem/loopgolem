@@ -15,4 +15,5 @@ public sealed record MissionTask(
     DateTimeOffset UpdatedAtUtc)
 {
     public string? ExecutionContext { get; init; }
+    public int ExecutionAttemptCount { get; init; } = 0;
 }

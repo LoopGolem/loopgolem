@@ -45,6 +45,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     title TEXT NOT NULL,
                     definition_json TEXT NULL,
                     execution_context TEXT NULL,
+                    execution_attempt_count INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
                     result TEXT NULL,
                     result_details TEXT NULL,
@@ -90,6 +91,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             "mission_tasks",
             "execution_context",
             "TEXT NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "mission_tasks",
+            "execution_attempt_count",
+            "INTEGER NOT NULL DEFAULT 0",
             cancellationToken);
 
         await using var indexCommand = connection.CreateCommand();
@@ -290,10 +297,10 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, definition_json, execution_context, status,
+                id, mission_id, sequence, kind, title, definition_json, execution_context, execution_attempt_count, status,
                 result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $definitionJson, $executionContext, $status,
+                $id, $missionId, $sequence, $kind, $title, $definitionJson, $executionContext, $executionAttemptCount, $status,
                 $result, $resultDetails, $error, $createdUtc, $updatedUtc);
             """;
 
@@ -311,10 +318,10 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, definition_json, execution_context, status,
+                id, mission_id, sequence, kind, title, definition_json, execution_context, execution_attempt_count, status,
                 result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $definitionJson, $executionContext, $status,
+                $id, $missionId, $sequence, $kind, $title, $definitionJson, $executionContext, $executionAttemptCount, $status,
                 $result, $resultDetails, $error, $createdUtc, $updatedUtc)
             ON CONFLICT(id) DO UPDATE SET
                 sequence = excluded.sequence,
@@ -322,6 +329,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 title = excluded.title,
                 definition_json = excluded.definition_json,
                 execution_context = excluded.execution_context,
+                execution_attempt_count = excluded.execution_attempt_count,
                 status = excluded.status,
                 result = excluded.result,
                 result_details = excluded.result_details,
@@ -374,7 +382,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         await using var taskCommand = connection.CreateCommand();
         taskCommand.CommandText = """
             SELECT id, mission_id, sequence, kind, title, definition_json, execution_context, status,
-                   result, result_details, error, created_utc, updated_utc
+                   result, result_details, error, created_utc, updated_utc, execution_attempt_count
             FROM mission_tasks
             WHERE mission_id = $missionId
             ORDER BY sequence;
@@ -405,7 +413,8 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 ExecutionContext =
                     taskReader.IsDBNull(6)
                         ? null
-                        : taskReader.GetString(6)
+                        : taskReader.GetString(6),
+                ExecutionAttemptCount = taskReader.GetInt32(13)
             });
         }
 
@@ -449,6 +458,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Parameters.AddWithValue(
             "$executionContext",
             (object?)task.ExecutionContext ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executionAttemptCount", task.ExecutionAttemptCount);
         command.Parameters.AddWithValue("$status", task.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)task.Result ?? DBNull.Value);
         command.Parameters.AddWithValue(
