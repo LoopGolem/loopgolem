@@ -123,6 +123,9 @@ public sealed partial class SqliteMissionStore(string databasePath) : IMissionSt
         await EnsureTelemetrySchemaAsync(
             connection,
             cancellationToken);
+        await EnsureCapabilitySchemaAsync(
+            connection,
+            cancellationToken);
     }
 
     public async Task CreateAsync(
