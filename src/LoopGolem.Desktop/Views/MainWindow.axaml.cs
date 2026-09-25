@@ -499,7 +499,10 @@ public partial class MainWindow : Window
             LocalizationService.Get(
                 sessionReuse == SessionReuseMode.Affinity
                     ? "Affinity"
-                    : "FreshPerTask"),
+                    : "FreshPerTask") +
+            $" · {LocalizationService.Get("Elapsed")}: " +
+            FormatDuration(
+                telemetry.DurationMilliseconds),
 
             $"{LocalizationService.Get("TotalTokens")}: " +
             $"{FormatTokenCount(telemetry.TotalTokens)} · " +
@@ -564,6 +567,20 @@ public partial class MainWindow : Window
             AgentSessionRole.Validator => "Validator",
             _ => role.ToString()
         });
+
+    private static string FormatDuration(
+        long durationMilliseconds)
+    {
+        var duration =
+            TimeSpan.FromMilliseconds(
+                Math.Max(
+                    0,
+                    durationMilliseconds));
+
+        return duration.TotalHours >= 1
+            ? $"{(int)duration.TotalHours}:{duration.Minutes:00}:{duration.Seconds:00}"
+            : $"{duration.Minutes}:{duration.Seconds:00}";
+    }
 
     private static string FormatPlainNumber(long value) =>
         value.ToString(
