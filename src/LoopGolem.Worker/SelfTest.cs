@@ -356,7 +356,12 @@ internal static class SelfTest
                 persistedTurns.Count != 1 ||
                 persistedTurns[0] != turn ||
                 persistedRecoveryCycles.Count != 1 ||
-                persistedRecoveryCycles[0] != recoveryCycle)
+                persistedRecoveryCycles[0] with
+                {
+                    RepairTaskIds = recoveryCycle.RepairTaskIds
+                } != recoveryCycle ||
+                !persistedRecoveryCycles[0].RepairTaskIds.SequenceEqual(
+                    recoveryCycle.RepairTaskIds))
             {
                 Console.Error.WriteLine(
                     "Self-test did not round-trip orchestration telemetry.");
