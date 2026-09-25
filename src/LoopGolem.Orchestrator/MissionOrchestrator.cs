@@ -6,6 +6,8 @@ namespace LoopGolem.Orchestrator;
 
 public sealed class MissionOrchestrator : IMissionOrchestrator
 {
+    private const int MaxValidationCycles = 3;
+
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
 
@@ -71,7 +73,10 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 return null;
             }
 
-            if (snapshot.Mission.Status is MissionStatus.Completed or MissionStatus.Failed)
+            if (snapshot.Mission.Status is
+                MissionStatus.Completed or
+                MissionStatus.Failed or
+                MissionStatus.NeedsHumanAttention)
             {
                 return snapshot;
             }
@@ -79,10 +84,13 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                snapshot = UpdateReadyStates(snapshot, DateTimeOffset.UtcNow);
+                snapshot = UpdateReadyStates(
+                    snapshot,
+                    DateTimeOffset.UtcNow);
 
                 var incomplete = snapshot.Tasks
-                    .Where(task => task.Status != DomainTaskStatus.Completed)
+                    .Where(task =>
+                        task.Status != DomainTaskStatus.Completed)
                     .OrderBy(task => task.Sequence)
                     .ToArray();
 
@@ -98,17 +106,24 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                             UpdatedAtUtc = DateTimeOffset.UtcNow
                         }
                     };
-                    await _store.UpdateAsync(snapshot, cancellationToken);
+
+                    await _store.UpdateAsync(
+                        snapshot,
+                        cancellationToken);
+
                     return snapshot;
                 }
 
                 var failed = incomplete.FirstOrDefault(
-                    task => task.Status == DomainTaskStatus.Failed);
+                    task =>
+                        task.Status == DomainTaskStatus.Failed);
+
                 if (failed is not null)
                 {
                     return await MarkMissionFailedAsync(
                         snapshot,
-                        failed.Error ?? $"Task '{failed.Title}' failed.",
+                        failed.Error ??
+                            $"Task '{failed.Title}' failed.",
                         cancellationToken);
                 }
 
@@ -126,7 +141,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         cancellationToken);
                 }
 
-                if (!_executors.TryGetValue(current.Kind, out var executor))
+                if (!_executors.TryGetValue(
+                        current.Kind,
+                        out var executor))
                 {
                     return await MarkMissionFailedAsync(
                         snapshot,
@@ -147,22 +164,42 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     {
                         Mission = snapshot.Mission with
                         {
-                            Status = current.Kind == MissionTaskKind.PlanMission
-                                ? MissionStatus.Planning
-                                : MissionStatus.Running,
+                            Status =
+                                current.Kind == MissionTaskKind.PlanMission
+                                    ? MissionStatus.Planning
+                                    : MissionStatus.Running,
                             Error = null,
                             UpdatedAtUtc = startedAt
                         }
                     },
                     running);
-                await _store.UpdateAsync(snapshot, cancellationToken);
 
-                var result = await executor.ExecuteAsync(
-                    snapshot.Mission,
-                    running,
+                await _store.UpdateAsync(
+                    snapshot,
                     cancellationToken);
 
+                TaskExecutionResult result;
+                try
+                {
+                    result = await executor.ExecuteAsync(
+                        snapshot.Mission,
+                        running,
+                        cancellationToken);
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    result = TaskExecutionResult.Failed(
+                        $"Task '{running.Title}' threw an exception.",
+                        exception.Message);
+                }
+
                 var finishedAt = DateTimeOffset.UtcNow;
+
                 if (!result.Success)
                 {
                     var failedTask = running with
@@ -174,7 +211,10 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         UpdatedAtUtc = finishedAt
                     };
 
-                    snapshot = ReplaceTask(snapshot, failedTask);
+                    snapshot = ReplaceTask(
+                        snapshot,
+                        failedTask);
+
                     snapshot = snapshot with
                     {
                         Mission = snapshot.Mission with
@@ -185,7 +225,10 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         }
                     };
 
-                    await _store.UpdateAsync(snapshot, cancellationToken);
+                    await _store.UpdateAsync(
+                        snapshot,
+                        cancellationToken);
+
                     return snapshot;
                 }
 
@@ -198,7 +241,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     UpdatedAtUtc = finishedAt
                 };
 
-                snapshot = ReplaceTask(snapshot, completed);
+                snapshot = ReplaceTask(
+                    snapshot,
+                    completed);
 
                 if (completed.Kind == MissionTaskKind.PlanMission)
                 {
@@ -217,8 +262,50 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
                     snapshot = expansion.Snapshot!;
                 }
+                else if (
+                    completed.Kind == MissionTaskKind.ValidateMission)
+                {
+                    var expansion = ExpandValidationResult(
+                        snapshot,
+                        completed,
+                        finishedAt);
 
-                snapshot = UpdateReadyStates(snapshot, finishedAt);
+                    if (expansion.Error is not null)
+                    {
+                        return await MarkMissionFailedAsync(
+                            snapshot,
+                            expansion.Error,
+                            cancellationToken);
+                    }
+
+                    snapshot = expansion.Snapshot!;
+
+                    if (expansion.NeedsHumanAttention)
+                    {
+                        snapshot = snapshot with
+                        {
+                            Mission = snapshot.Mission with
+                            {
+                                Status =
+                                    MissionStatus.NeedsHumanAttention,
+                                Result = completed.Result,
+                                Error = null,
+                                UpdatedAtUtc = finishedAt
+                            }
+                        };
+
+                        await _store.UpdateAsync(
+                            snapshot,
+                            cancellationToken);
+
+                        return snapshot;
+                    }
+                }
+
+                snapshot = UpdateReadyStates(
+                    snapshot,
+                    finishedAt);
+
                 snapshot = snapshot with
                 {
                     Mission = snapshot.Mission with
@@ -228,7 +315,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     }
                 };
 
-                await _store.UpdateAsync(snapshot, cancellationToken);
+                await _store.UpdateAsync(
+                    snapshot,
+                    cancellationToken);
             }
         }
         finally
@@ -240,11 +329,16 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
     public async Task ResumePendingAsync(
         CancellationToken cancellationToken = default)
     {
-        var pending = await _store.ListRecoverableAsync(cancellationToken);
+        var pending = await _store.ListRecoverableAsync(
+            cancellationToken);
+
         foreach (var snapshot in pending)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await RunMissionAsync(snapshot.Mission.Id, cancellationToken);
+
+            await RunMissionAsync(
+                snapshot.Mission.Id,
+                cancellationToken);
         }
     }
 
@@ -253,123 +347,403 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         MissionExecutionMode executionMode,
         DateTimeOffset now)
     {
-        var steps = new List<(MissionTaskKind Kind, string Title, PlannedTask Definition)>
-        {
-            (MissionTaskKind.InspectWorkspace, "Inspect workspace",
-                InternalDefinition("inspect-workspace", [])),
-            (MissionTaskKind.DiscoverProjects, "Discover project files",
-                InternalDefinition("discover-projects", ["inspect-workspace"]))
-        };
+        var steps =
+            new List<(
+                MissionTaskKind Kind,
+                string Title,
+                PlannedTask Definition)>
+            {
+                (
+                    MissionTaskKind.InspectWorkspace,
+                    "Inspect workspace",
+                    InternalDefinition(
+                        "inspect-workspace",
+                        [])),
+                (
+                    MissionTaskKind.DiscoverProjects,
+                    "Discover project files",
+                    InternalDefinition(
+                        "discover-projects",
+                        ["inspect-workspace"]))
+            };
 
-        steps.Add(executionMode == MissionExecutionMode.Codex
-            ? (MissionTaskKind.PlanMission, "Plan mission",
-                InternalDefinition("plan-mission", ["discover-projects"]))
-            : (MissionTaskKind.BuildDotNet, "Build .NET workspace",
-                InternalDefinition("build-dotnet", ["discover-projects"])));
+        steps.Add(
+            executionMode == MissionExecutionMode.Codex
+                ? (
+                    MissionTaskKind.PlanMission,
+                    "Plan mission",
+                    InternalDefinition(
+                        "plan-mission",
+                        ["discover-projects"]))
+                : (
+                    MissionTaskKind.BuildDotNet,
+                    "Build .NET workspace",
+                    InternalDefinition(
+                        "build-dotnet",
+                        ["discover-projects"])));
 
-        return steps.Select((step, index) => new MissionTask(
-            Guid.NewGuid().ToString("N"),
-            missionId,
-            index + 1,
-            step.Kind,
-            step.Title,
-            step.Definition,
-            DomainTaskStatus.Planned,
-            null,
-            null,
-            null,
-            now,
-            now)).ToArray();
+        return steps
+            .Select(
+                (step, index) =>
+                    NewTask(
+                        missionId,
+                        index + 1,
+                        step.Kind,
+                        step.Title,
+                        step.Definition,
+                        now))
+            .ToArray();
     }
 
-    private static (MissionSnapshot? Snapshot, string? Error) ExpandPlannerResult(
+    private static (
+        MissionSnapshot? Snapshot,
+        string? Error) ExpandPlannerResult(
         MissionSnapshot snapshot,
         MissionTask plannerTask,
         DateTimeOffset now)
     {
-        if (string.IsNullOrWhiteSpace(plannerTask.ResultDetails))
+        if (string.IsNullOrWhiteSpace(
+                plannerTask.ResultDetails))
         {
-            return (null, "Planner completed without a structured mission plan.");
+            return (
+                null,
+                "Planner completed without a structured mission plan.");
         }
 
-        MissionPlan? plan;
+        PlannerResult? result;
         try
         {
-            plan = JsonSerializer.Deserialize<MissionPlan>(
+            result = JsonSerializer.Deserialize<PlannerResult>(
                 plannerTask.ResultDetails,
                 JsonOptions);
         }
         catch (JsonException exception)
         {
-            return (null, $"Planner returned invalid JSON: {exception.Message}");
+            return (
+                null,
+                $"Planner returned invalid JSON: {exception.Message}");
         }
 
-        if (plan is null)
+        if (result is null ||
+            string.IsNullOrWhiteSpace(result.BaseCommit))
         {
-            return (null, "Planner returned an empty mission plan.");
+            return (
+                null,
+                "Planner returned an incomplete plan context.");
         }
 
-        var planError = MissionPlanValidator.Validate(plan);
+        var planError =
+            MissionPlanValidator.Validate(result.Plan);
+
         if (planError is not null)
         {
             return (null, planError);
         }
 
         var tasks = snapshot.Tasks.ToList();
-        var sequence = tasks.Max(task => task.Sequence) + 1;
+        var sequence =
+            tasks.Max(task => task.Sequence) + 1;
 
-        foreach (var definition in plan.Tasks)
+        foreach (var definition in result.Plan.Tasks)
         {
-            tasks.Add(new MissionTask(
-                Guid.NewGuid().ToString("N"),
-                snapshot.Mission.Id,
-                sequence++,
-                definition.Executor == PlannedExecutorKinds.Deterministic
-                    ? MissionTaskKind.DeterministicWork
-                    : MissionTaskKind.AgentWork,
-                definition.Title,
-                definition,
-                DomainTaskStatus.Planned,
-                null,
-                null,
-                null,
-                now,
-                now));
+            tasks.Add(
+                NewTask(
+                    snapshot.Mission.Id,
+                    sequence++,
+                    GetKind(definition),
+                    definition.Title,
+                    definition,
+                    now));
         }
 
-        var terminalDependencies = plan.Tasks.Count == 0
-            ? new[] { "plan-mission" }
-            : plan.Tasks.Select(task => task.Id).ToArray();
+        var dependencies =
+            result.Plan.Tasks.Count == 0
+                ? new[] { "plan-mission" }
+                : result.Plan.Tasks
+                    .Select(task => task.Id)
+                    .ToArray();
 
-        tasks.Add(new MissionTask(
-            Guid.NewGuid().ToString("N"),
+        AppendVerificationAndValidator(
+            tasks,
             snapshot.Mission.Id,
-            sequence++,
-            MissionTaskKind.InspectGitChanges,
-            "Inspect Git changes",
-            InternalDefinition("inspect-git", terminalDependencies),
-            DomainTaskStatus.Planned,
-            null,
-            null,
-            null,
-            now,
-            now));
+            ref sequence,
+            dependencies,
+            result.BaseCommit,
+            result.Plan,
+            cycle: 1,
+            now);
 
-        tasks.Add(new MissionTask(
-            Guid.NewGuid().ToString("N"),
+        return (
+            snapshot with
+            {
+                Tasks = tasks
+                    .OrderBy(task => task.Sequence)
+                    .ToArray()
+            },
+            null);
+    }
+
+    private static (
+        MissionSnapshot? Snapshot,
+        string? Error,
+        bool NeedsHumanAttention)
+        ExpandValidationResult(
+            MissionSnapshot snapshot,
+            MissionTask validatorTask,
+            DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(
+                validatorTask.ResultDetails))
+        {
+            return (
+                null,
+                "Validator completed without a structured result.",
+                false);
+        }
+
+        ValidatorExecutionResult? execution;
+        try
+        {
+            execution =
+                JsonSerializer.Deserialize<ValidatorExecutionResult>(
+                    validatorTask.ResultDetails,
+                    JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return (
+                null,
+                $"Validator returned invalid JSON: {exception.Message}",
+                false);
+        }
+
+        if (execution is null)
+        {
+            return (
+                null,
+                "Validator returned an empty result.",
+                false);
+        }
+
+        var context = ParseValidatorContext(
+            validatorTask);
+
+        if (context.Error is not null)
+        {
+            return (
+                null,
+                context.Error,
+                false);
+        }
+
+        var validatorContext = context.Context!;
+
+        if (execution.Result.Status == "ok")
+        {
+            return (
+                snapshot,
+                null,
+                false);
+        }
+
+        if (execution.Result.Status != "not_ok")
+        {
+            return (
+                null,
+                $"Validator returned unsupported status '{execution.Result.Status}'.",
+                false);
+        }
+
+        if (validatorContext.Cycle >=
+            MaxValidationCycles)
+        {
+            return (
+                snapshot,
+                null,
+                true);
+        }
+
+        var corrections =
+            execution.Result.Tasks;
+
+        var correctionError =
+            MissionPlanValidator.ValidateTasks(
+                corrections);
+
+        if (correctionError is not null)
+        {
+            return (
+                null,
+                $"Validator correction plan is invalid: {correctionError}",
+                false);
+        }
+
+        if (corrections.Count == 0)
+        {
+            return (
+                null,
+                "Validator returned not_ok without correction tasks.",
+                false);
+        }
+
+        var existingIds = snapshot.Tasks
+            .Select(task => task.Definition?.Id)
+            .Where(id =>
+                !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (corrections.Any(
+                correction =>
+                    existingIds.Contains(correction.Id)))
+        {
+            return (
+                null,
+                "Validator correction task ids collide with existing mission task ids.",
+                false);
+        }
+
+        var correctionIds = corrections
+            .Select(task => task.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var correction in corrections)
+        {
+            if (correction.DependsOn.Any(
+                    dependency =>
+                        !correctionIds.Contains(dependency)))
+            {
+                return (
+                    null,
+                    $"Correction task '{correction.Id}' may depend only on tasks from the same correction batch.",
+                    false);
+            }
+        }
+
+        var tasks = snapshot.Tasks.ToList();
+        var sequence =
+            tasks.Max(task => task.Sequence) + 1;
+
+        foreach (var correction in corrections)
+        {
+            tasks.Add(
+                NewTask(
+                    snapshot.Mission.Id,
+                    sequence++,
+                    GetKind(correction),
+                    correction.Title,
+                    correction,
+                    now));
+        }
+
+        var dependencies = corrections
+            .Select(task => task.Id)
+            .ToArray();
+
+        AppendVerificationAndValidator(
+            tasks,
             snapshot.Mission.Id,
-            sequence,
-            MissionTaskKind.BuildDotNet,
-            "Build .NET workspace",
-            InternalDefinition("build-dotnet", ["inspect-git"]),
-            DomainTaskStatus.Planned,
-            null,
-            null,
-            null,
-            now,
-            now));
+            ref sequence,
+            dependencies,
+            validatorContext.BaseCommit,
+            validatorContext.Plan,
+            validatorContext.Cycle + 1,
+            now);
 
-        return (snapshot with { Tasks = tasks.OrderBy(task => task.Sequence).ToArray() }, null);
+        return (
+            snapshot with
+            {
+                Tasks = tasks
+                    .OrderBy(task => task.Sequence)
+                    .ToArray()
+            },
+            null,
+            false);
+    }
+
+    private static void AppendVerificationAndValidator(
+        List<MissionTask> tasks,
+        string missionId,
+        ref int sequence,
+        IReadOnlyList<string> dependencies,
+        string baseCommit,
+        MissionPlan plan,
+        int cycle,
+        DateTimeOffset now)
+    {
+        var inspectId = $"inspect-git-{cycle}";
+        var buildId = $"build-dotnet-{cycle}";
+        var validatorId = $"validate-{cycle}";
+
+        tasks.Add(
+            NewTask(
+                missionId,
+                sequence++,
+                MissionTaskKind.InspectGitChanges,
+                "Inspect Git changes",
+                InternalDefinition(
+                    inspectId,
+                    dependencies),
+                now));
+
+        tasks.Add(
+            NewTask(
+                missionId,
+                sequence++,
+                MissionTaskKind.BuildDotNet,
+                "Build .NET workspace",
+                InternalDefinition(
+                    buildId,
+                    [inspectId]),
+                now));
+
+        tasks.Add(
+            NewTask(
+                missionId,
+                sequence++,
+                MissionTaskKind.ValidateMission,
+                "Validate mission",
+                ValidatorDefinition(
+                    validatorId,
+                    [buildId],
+                    baseCommit,
+                    plan,
+                    cycle),
+                now));
+    }
+
+    private static (
+        ValidatorContext? Context,
+        string? Error) ParseValidatorContext(
+        MissionTask validatorTask)
+    {
+        if (validatorTask.Definition is null ||
+            string.IsNullOrWhiteSpace(
+                validatorTask.Definition.Prompt))
+        {
+            return (
+                null,
+                "Validator task context is missing.");
+        }
+
+        try
+        {
+            var context =
+                JsonSerializer.Deserialize<ValidatorContext>(
+                    validatorTask.Definition.Prompt,
+                    JsonOptions);
+
+            return context is null
+                ? (
+                    null,
+                    "Validator task context is empty.")
+                : (context, null);
+        }
+        catch (JsonException exception)
+        {
+            return (
+                null,
+                $"Validator task context is invalid: {exception.Message}");
+        }
     }
 
     private static MissionSnapshot UpdateReadyStates(
@@ -379,23 +753,33 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         var tasks = snapshot.Tasks.ToArray();
         var changed = false;
 
-        for (var i = 0; i < tasks.Length; i++)
+        for (var index = 0;
+             index < tasks.Length;
+             index++)
         {
-            if (tasks[i].Status != DomainTaskStatus.Planned ||
-                !DependenciesSatisfied(tasks[i], tasks))
+            var task = tasks[index];
+
+            if (task.Status !=
+                    DomainTaskStatus.Planned ||
+                !DependenciesSatisfied(
+                    task,
+                    tasks))
             {
                 continue;
             }
 
-            tasks[i] = tasks[i] with
+            tasks[index] = task with
             {
                 Status = DomainTaskStatus.Ready,
                 UpdatedAtUtc = now
             };
+
             changed = true;
         }
 
-        return changed ? snapshot with { Tasks = tasks } : snapshot;
+        return changed
+            ? snapshot with { Tasks = tasks }
+            : snapshot;
     }
 
     private static bool DependenciesSatisfied(
@@ -405,20 +789,27 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         if (task.Definition is null)
         {
             return allTasks
-                .Where(other => other.Sequence < task.Sequence)
-                .All(other => other.Status == DomainTaskStatus.Completed);
+                .Where(other =>
+                    other.Sequence < task.Sequence)
+                .All(other =>
+                    other.Status ==
+                    DomainTaskStatus.Completed);
         }
 
-        foreach (var dependencyId in task.Definition.DependsOn)
+        foreach (var dependencyId
+                 in task.Definition.DependsOn)
         {
-            var dependency = allTasks.FirstOrDefault(
-                candidate => string.Equals(
-                    candidate.Definition?.Id,
-                    dependencyId,
-                    StringComparison.Ordinal));
+            var dependency =
+                allTasks.FirstOrDefault(
+                    candidate =>
+                        string.Equals(
+                            candidate.Definition?.Id,
+                            dependencyId,
+                            StringComparison.Ordinal));
 
             if (dependency is null ||
-                dependency.Status != DomainTaskStatus.Completed)
+                dependency.Status !=
+                    DomainTaskStatus.Completed)
             {
                 return false;
             }
@@ -427,10 +818,11 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         return true;
     }
 
-    private async Task<MissionSnapshot> MarkMissionFailedAsync(
-        MissionSnapshot snapshot,
-        string error,
-        CancellationToken cancellationToken)
+    private async Task<MissionSnapshot>
+        MarkMissionFailedAsync(
+            MissionSnapshot snapshot,
+            string error,
+            CancellationToken cancellationToken)
     {
         snapshot = snapshot with
         {
@@ -438,12 +830,45 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             {
                 Status = MissionStatus.Failed,
                 Error = error,
-                UpdatedAtUtc = DateTimeOffset.UtcNow
+                UpdatedAtUtc =
+                    DateTimeOffset.UtcNow
             }
         };
-        await _store.UpdateAsync(snapshot, cancellationToken);
+
+        await _store.UpdateAsync(
+            snapshot,
+            cancellationToken);
+
         return snapshot;
     }
+
+    private static MissionTaskKind GetKind(
+        PlannedTask definition) =>
+        definition.Executor ==
+        PlannedExecutorKinds.Deterministic
+            ? MissionTaskKind.DeterministicWork
+            : MissionTaskKind.AgentWork;
+
+    private static MissionTask NewTask(
+        string missionId,
+        int sequence,
+        MissionTaskKind kind,
+        string title,
+        PlannedTask definition,
+        DateTimeOffset now) =>
+        new(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            sequence,
+            kind,
+            title,
+            definition,
+            DomainTaskStatus.Planned,
+            null,
+            null,
+            null,
+            now,
+            now);
 
     private static MissionSnapshot ReplaceTask(
         MissionSnapshot snapshot,
@@ -451,7 +876,10 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         snapshot with
         {
             Tasks = snapshot.Tasks
-                .Select(task => task.Id == replacement.Id ? replacement : task)
+                .Select(task =>
+                    task.Id == replacement.Id
+                        ? replacement
+                        : task)
                 .OrderBy(task => task.Sequence)
                 .ToArray()
         };
@@ -468,22 +896,51 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             [],
             [],
             dependsOn,
-            new DeterministicOperation(
-                DeterministicOperationKinds.None,
-                string.Empty,
-                string.Empty,
-                string.Empty,
-                string.Empty,
-                string.Empty,
-                [],
-                string.Empty,
-                60));
+            EmptyOperation());
 
-    private static string BuildMissionResult(IEnumerable<MissionTask> tasks) =>
+    private static PlannedTask ValidatorDefinition(
+        string id,
+        IReadOnlyList<string> dependsOn,
+        string baseCommit,
+        MissionPlan plan,
+        int cycle) =>
+        new(
+            id,
+            "Validate mission",
+            PlannedExecutorKinds.Internal,
+            JsonSerializer.Serialize(
+                new ValidatorContext(
+                    baseCommit,
+                    plan,
+                    cycle),
+                JsonOptions),
+            [],
+            [],
+            [],
+            dependsOn,
+            EmptyOperation());
+
+    private static DeterministicOperation EmptyOperation() =>
+        new(
+            DeterministicOperationKinds.None,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            [],
+            string.Empty,
+            60);
+
+    private static string BuildMissionResult(
+        IEnumerable<MissionTask> tasks) =>
         string.Join(
             Environment.NewLine,
             tasks
                 .OrderBy(task => task.Sequence)
-                .Where(task => !string.IsNullOrWhiteSpace(task.Result))
-                .Select(task => $"{task.Title}: {task.Result}"));
+                .Where(task =>
+                    !string.IsNullOrWhiteSpace(
+                        task.Result))
+                .Select(task =>
+                    $"{task.Title}: {task.Result}"));
 }

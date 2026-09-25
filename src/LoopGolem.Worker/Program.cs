@@ -24,6 +24,7 @@ IMissionTaskExecutor[] executors =
     new PlannerTaskExecutor(planning),
     new DeterministicTaskExecutor(processRunner),
     new MicroTaskAgentExecutor(planning),
+    new ValidatorTaskExecutor(planning),
     new GitChangesExecutor(processRunner),
     new DotNetBuildExecutor(processRunner)
 ];
