@@ -104,8 +104,10 @@ LoopGolem invokes autonomous `codex exec` calls with JSON event output enabled a
 
 Token usage is accumulated across completed retries for the same task and summed across tasks for the mission total shown in the Desktop. If the Worker or Codex process is terminated before a usage event is returned, LoopGolem does not invent an estimate for that interrupted call.
 
-The SQLite persistence foundation additionally supports normalized agent sessions and turns. Per-turn records are designed to retain the model, reasoning effort, role/purpose, duration, input, cached input, cache-write input, output and reasoning-output usage independently from task aggregates. Session reuse is still disabled in the current execution path until the resumable Codex transport and lease policy are wired in.
+SQLite additionally stores normalized agent sessions and turns. Per-turn records retain model, reasoning effort, role/purpose, duration, input, cached input, cache-write input, output and reasoning-output usage independently from task aggregates.
+
+The CLI transport understands three modes: fresh ephemeral execution, a new persistent session, and `codex exec resume <thread-id>`. Current mission policy still selects fresh ephemeral calls, so behavior remains equivalent to the pre-reuse architecture. JSONL stdout is consumed incrementally; `thread.started` is persisted immediately so a later persistent-session policy can survive Worker restarts. Persistent modes explicitly disable Codex memories so session reuse can be measured independently from provider memory features.
 
 ## Future direction
 
-The integration can later move to Codex app-server or the official SDK for richer streaming, lifecycle control, quota telemetry and resumable sessions without changing mission semantics.
+Codex app-server or an official SDK remain possible future transports for richer lifecycle and quota control, but they are no longer required merely to test resumable session reuse. The mission/session semantics stay provider-independent.
