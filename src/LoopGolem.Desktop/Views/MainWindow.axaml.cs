@@ -62,7 +62,6 @@ public partial class MainWindow : Window
         WorkerLabel.Text = $"{LocalizationService.Get("Worker")}:";
         CodexLabel.Text = $"{LocalizationService.Get("Codex")}:";
         CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
-        UseCodexCheckBox.Content = LocalizationService.Get("UseCodex");
         ReuseLowContextCheckBox.Content =
             LocalizationService.Get("ReuseLowContext");
         WorkspaceLabel.Text = LocalizationService.Get("Workspace");
@@ -104,6 +103,15 @@ public partial class MainWindow : Window
 
             WorkerStatusText.Text = LocalizationService.Get(
                 _workerConnected ? "Connected" : "Disconnected");
+
+            if (!_workerConnected)
+            {
+                _codexChecked = false;
+                _codexReady = false;
+                ReuseLowContextCheckBox.IsEnabled = false;
+                CodexStatusText.Text =
+                    LocalizationService.Get("CodexNotChecked");
+            }
 
             var unavailableText = LocalizationService.Get("WorkerUnavailable");
             if (!_workerConnected && string.IsNullOrWhiteSpace(MissionResultText.Text))
@@ -179,14 +187,7 @@ public partial class MainWindow : Window
             CodexStatusText,
             status?.Message ?? LocalizationService.Get("CodexUnavailable"));
 
-        UseCodexCheckBox.IsEnabled = _codexReady;
         ReuseLowContextCheckBox.IsEnabled = _codexReady;
-
-        if (!_codexReady)
-        {
-            UseCodexCheckBox.IsChecked = false;
-            ReuseLowContextCheckBox.IsEnabled = false;
-        }
     }
 
     private async void BrowseButton_Click(
@@ -228,6 +229,13 @@ public partial class MainWindow : Window
             }
         }
 
+        await RefreshCodexStatusAsync();
+        if (!_codexReady)
+        {
+            UpdateStartButtonState();
+            return;
+        }
+
         var goal = MissionGoalBox.Text?.Trim();
         if (string.IsNullOrWhiteSpace(goal) ||
             string.IsNullOrWhiteSpace(_workspacePath))
@@ -248,19 +256,19 @@ public partial class MainWindow : Window
             response = await _workerClient.CreateMissionAsync(
                 goal,
                 _workspacePath,
-                UseCodexCheckBox.IsChecked == true
-                    ? MissionExecutionMode.Codex
-                    : MissionExecutionMode.ValidateOnly,
-                UseCodexCheckBox.IsChecked == true
-                    ? ReuseLowContextCheckBox.IsChecked == true
-                        ? SessionReuseMode.Affinity
-                        : SessionReuseMode.Disabled
-                    : null);
+                MissionExecutionMode.Codex,
+                ReuseLowContextCheckBox.IsChecked == true
+                    ? SessionReuseMode.Affinity
+                    : SessionReuseMode.Disabled);
         }
         catch
         {
             _workerConnected = false;
+            _codexChecked = false;
+            _codexReady = false;
+            ReuseLowContextCheckBox.IsEnabled = false;
             WorkerStatusText.Text = LocalizationService.Get("Disconnected");
+            CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
             MissionStatusValue.Text = LocalizationService.Get("NotStarted");
             MissionResultText.Text = LocalizationService.Get("WorkerUnavailable");
             UpdateStartButtonState();
@@ -643,6 +651,8 @@ public partial class MainWindow : Window
     {
         StartButton.IsEnabled =
             _workerConnected &&
+            _codexChecked &&
+            _codexReady &&
             !string.IsNullOrWhiteSpace(_workspacePath) &&
             !string.IsNullOrWhiteSpace(MissionGoalBox.Text);
     }

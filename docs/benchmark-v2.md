@@ -46,8 +46,10 @@ The exact full prompt must be copied from the original benchmark record and save
 
 In the Desktop:
 
-- enable **Use Codex**
+- confirm Codex is reported ready/authenticated
 - disable **Reuse Low context**
+
+Codex is mandatory for Desktop missions; there is no separate Use Codex toggle.
 
 The created mission must show:
 
@@ -59,8 +61,10 @@ This persists `SessionReuseMode.Disabled` and forces Luna Low work through `Fres
 
 In the Desktop:
 
-- enable **Use Codex**
+- confirm Codex is reported ready/authenticated
 - enable **Reuse Low context**
+
+Codex is mandatory for Desktop missions; there is no separate Use Codex toggle.
 
 The created mission must show:
 
