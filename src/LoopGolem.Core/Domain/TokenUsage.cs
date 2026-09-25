@@ -7,11 +7,17 @@ public sealed record TokenUsage(
     long ReasoningOutputTokens,
     long TotalTokens)
 {
+    public long CacheWriteInputTokens { get; init; }
+
     public TokenUsage Add(TokenUsage other) =>
         new(
             checked(InputTokens + other.InputTokens),
             checked(CachedInputTokens + other.CachedInputTokens),
             checked(OutputTokens + other.OutputTokens),
             checked(ReasoningOutputTokens + other.ReasoningOutputTokens),
-            checked(TotalTokens + other.TotalTokens));
+            checked(TotalTokens + other.TotalTokens))
+        {
+            CacheWriteInputTokens = checked(
+                CacheWriteInputTokens + other.CacheWriteInputTokens)
+        };
 }
