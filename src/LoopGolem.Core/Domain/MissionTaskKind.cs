@@ -6,6 +6,7 @@ public enum MissionTaskKind
     DiscoverProjects,
     InspectCapabilities,
     PlanMission,
+    PlanRecovery,
     DeterministicWork,
     AgentWork,
     ValidateMission,
