@@ -4,6 +4,7 @@ public enum MissionTaskKind
 {
     InspectWorkspace,
     DiscoverProjects,
+    InspectCapabilities,
     PlanMission,
     DeterministicWork,
     AgentWork,
