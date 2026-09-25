@@ -9,9 +9,9 @@ namespace LoopGolem.Worker.Agents;
 public sealed class CodexPlanningService(
     ProcessRunner processRunner,
     CodexCliService runtime,
-    ICodexSessionTransport transport,
     CodexSupervisorSessionService supervisor,
     CodexWorkerSessionService workerSessions,
+    CodexValidatorSessionService validatorSessions,
     EnvironmentCapabilityService capabilityService) :
     IMissionRecoveryPlanner
 {
@@ -322,8 +322,11 @@ public sealed class CodexPlanningService(
                 "The base commit or original plan is missing.");
         }
 
-        var status = await runtime.GetStatusAsync(cancellationToken);
-        var runtimeError = ValidateRuntime(status);
+        var status =
+            await runtime.GetStatusAsync(
+                cancellationToken);
+        var runtimeError =
+            ValidateRuntime(status);
         if (runtimeError is not null)
         {
             return runtimeError;
@@ -338,11 +341,12 @@ public sealed class CodexPlanningService(
         string snapshotCommit;
         try
         {
-            snapshotCommit = await _snapshots.CreateSnapshotCommitAsync(
-                mission.WorkspacePath,
-                context.BaseCommit,
-                mission.Id,
-                cancellationToken);
+            snapshotCommit =
+                await _snapshots.CreateSnapshotCommitAsync(
+                    mission.WorkspacePath,
+                    context.BaseCommit,
+                    mission.Id,
+                    cancellationToken);
         }
         catch (Exception exception)
             when (exception is not OperationCanceledException)
@@ -352,25 +356,19 @@ public sealed class CodexPlanningService(
                 exception.Message);
         }
 
-        var run = await transport.RunStructuredAsync(
-            new CodexStructuredRunRequest(
-                mission.Id,
-                task.Id,
-                AgentSessionRole.Validator,
-                AgentTurnPurpose.Validation,
-                CodexSessionMode.FreshEphemeral,
-                null,
-                mission.WorkspacePath,
+        var run =
+            await validatorSessions.RunValidationAsync(
+                mission,
+                task,
                 PlannerModel,
                 PlannerReasoning,
-                "read-only",
                 ValidatorSchema,
                 BuildValidatorPrompt(
                     mission,
                     context,
                     snapshotCommit,
-                    capabilities)),
-            cancellationToken);
+                    capabilities),
+                cancellationToken);
 
         DevelopmentDiagnostics.Write(
             $"validator.raw:{context.Cycle}",
@@ -379,84 +377,153 @@ public sealed class CodexPlanningService(
 
         if (run.Process.TimedOut)
         {
-            return TaskExecutionResult.Failed(
-                "Validator timed out.",
-                "GPT-6 Luna High exceeded the validator timeout.",
-                run.Details, run.TokenUsage);
+            return await RejectValidationAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Validator timed out.",
+                    "GPT-6 Luna High exceeded the validator timeout.",
+                    run.Details,
+                    run.TokenUsage),
+                "validator_timeout");
         }
 
         if (run.Process.ExitCode != 0)
         {
-            return TaskExecutionResult.Failed(
-                $"Validator exited with code {run.Process.ExitCode}.",
-                GetProcessError(run.Process),
-                run.Details, run.TokenUsage);
+            return await RejectValidationAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    $"Validator exited with code {run.Process.ExitCode}.",
+                    GetProcessError(run.Process),
+                    run.Details,
+                    run.TokenUsage),
+                "validator_process_failed");
         }
 
         ValidationResult? result;
         try
         {
-            result = JsonSerializer.Deserialize<ValidationResult>(
-                run.FinalMessage,
-                JsonOptions);
+            result =
+                JsonSerializer.Deserialize<ValidationResult>(
+                    run.FinalMessage,
+                    JsonOptions);
         }
         catch (JsonException exception)
         {
-            return TaskExecutionResult.Failed(
-                "Validator returned invalid JSON.",
-                exception.Message,
-                run.Details, run.TokenUsage);
+            return await RejectValidationAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Validator returned invalid JSON.",
+                    exception.Message,
+                    run.Details,
+                    run.TokenUsage),
+                "validator_invalid_json");
         }
 
         if (result is null ||
             result.Status is not ("ok" or "not_ok"))
         {
-            return TaskExecutionResult.Failed(
-                "Validator returned an unsupported result.",
-                result?.Status ?? "The structured result was empty.",
-                run.Details, run.TokenUsage);
+            return await RejectValidationAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Validator returned an unsupported result.",
+                    result?.Status ??
+                        "The structured result was empty.",
+                    run.Details,
+                    run.TokenUsage),
+                "validator_unsupported_result");
         }
 
-        if (result.Status == "ok" && result.Tasks.Count != 0)
+        if (result.Status == "ok" &&
+            result.Tasks.Count != 0)
         {
-            return TaskExecutionResult.Failed(
-                "Validator returned correction tasks with status ok.",
-                "An ok validation must return an empty task list.",
-                run.Details, run.TokenUsage);
+            return await RejectValidationAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Validator returned correction tasks with status ok.",
+                    "An ok validation must return an empty task list.",
+                    run.Details,
+                    run.TokenUsage),
+                "validator_invalid_ok_result");
         }
 
         if (result.Status == "not_ok")
         {
-            var taskError = MissionPlanValidator.ValidateTasks(result.Tasks);
+            var taskError =
+                MissionPlanValidator.ValidateTasks(
+                    result.Tasks);
+
             if (taskError is not null)
             {
-                return TaskExecutionResult.Failed(
-                    "Validator returned an invalid correction plan.",
-                    taskError,
-                    run.Details, run.TokenUsage);
+                return await RejectValidationAsync(
+                    mission,
+                    run,
+                    TaskExecutionResult.Failed(
+                        "Validator returned an invalid correction plan.",
+                        taskError,
+                        run.Details,
+                        run.TokenUsage),
+                    "validator_invalid_correction_plan");
             }
 
             if (result.Tasks.Count == 0)
             {
-                return TaskExecutionResult.Failed(
-                    "Validator returned not_ok without correction tasks.",
-                    "At least one correction task is required.",
-                    run.Details, run.TokenUsage);
+                return await RejectValidationAsync(
+                    mission,
+                    run,
+                    TaskExecutionResult.Failed(
+                        "Validator returned not_ok without correction tasks.",
+                        "At least one correction task is required.",
+                        run.Details,
+                        run.TokenUsage),
+                    "validator_empty_correction_plan");
             }
 
-            var expectedPrefix = $"fix{context.Cycle}_";
+            var expectedPrefix =
+                $"fix{context.Cycle}_";
+
             if (result.Tasks.Any(
                     correction =>
                         !correction.Id.StartsWith(
                             expectedPrefix,
                             StringComparison.Ordinal)))
             {
-                return TaskExecutionResult.Failed(
-                    "Validator returned correction ids outside the required namespace.",
-                    $"Every correction id in cycle {context.Cycle} must start with '{expectedPrefix}'.",
-                    run.Details, run.TokenUsage);
+                return await RejectValidationAsync(
+                    mission,
+                    run,
+                    TaskExecutionResult.Failed(
+                        "Validator returned correction ids outside the required namespace.",
+                        $"Every correction id in cycle {context.Cycle} must start with '{expectedPrefix}'.",
+                        run.Details,
+                        run.TokenUsage),
+                    "validator_invalid_correction_namespace");
             }
         }
+
+        var maxValidationCycles =
+            Math.Max(
+                1,
+                mission.Policy.MaxValidationCycles);
+        var keepActive =
+            result.Status == "not_ok" &&
+            context.Cycle <
+                maxValidationCycles;
+
+        await validatorSessions.CompleteValidationAsync(
+            mission.Id,
+            run,
+            accepted: true,
+            keepActive,
+            keepActive
+                ? "validation_cycle_complete"
+                : result.Status == "ok"
+                    ? "validation_complete"
+                    : "validation_limit_reached",
+            CancellationToken.None);
 
         return TaskExecutionResult.Succeeded(
             result.Summary,
@@ -466,6 +533,24 @@ public sealed class CodexPlanningService(
                     result),
                 JsonOptions),
             run.TokenUsage);
+    }
+
+    private async Task<TaskExecutionResult>
+        RejectValidationAsync(
+            Mission mission,
+            CodexStructuredRunResult run,
+            TaskExecutionResult failure,
+            string reason)
+    {
+        await validatorSessions.CompleteValidationAsync(
+            mission.Id,
+            run,
+            accepted: false,
+            keepActive: false,
+            reason,
+            CancellationToken.None);
+
+        return failure;
     }
 
     public async Task<TaskExecutionResult> ExecuteMicroTaskAsync(
