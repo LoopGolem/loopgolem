@@ -13,5 +13,8 @@ public sealed class PlannerTaskExecutor(
         Mission mission,
         MissionTask task,
         CancellationToken cancellationToken = default) =>
-        planning.PlanAsync(mission, cancellationToken);
+        planning.PlanAsync(
+            mission,
+            task,
+            cancellationToken);
 }
