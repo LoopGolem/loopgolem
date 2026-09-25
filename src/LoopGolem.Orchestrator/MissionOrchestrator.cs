@@ -1790,7 +1790,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
         }
 
         var prefix =
-            $"repair{cycle.CycleNumber}_";
+            RecoveryTaskNaming.GetRepairPrefix(
+                cycle.FailedTaskId,
+                cycle.CycleNumber);
         var existingIds =
             snapshot.Tasks
                 .Select(task =>
@@ -1834,7 +1836,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             RecoveryCycle cycle)
     {
         var prefix =
-            $"repair{cycle.CycleNumber}_";
+            RecoveryTaskNaming.GetRepairPrefix(
+                cycle.FailedTaskId,
+                cycle.CycleNumber);
 
         return snapshot.Tasks
             .Where(task =>
