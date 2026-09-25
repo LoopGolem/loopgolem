@@ -66,12 +66,17 @@ public sealed class CodexPlanningService(
             mission.WorkspacePath,
             cancellationToken);
 
+        var supervisorSession =
+            await ResolveSupervisorSessionRequestAsync(
+                mission,
+                cancellationToken);
+
         var run = await RunStructuredAsync(
             mission,
             task,
             AgentSessionRole.Supervisor,
             AgentTurnPurpose.Planning,
-            CodexSessionRequest.EphemeralFresh,
+            supervisorSession,
             PlannerModel,
             PlannerReasoning,
             "read-only",
@@ -758,6 +763,106 @@ public sealed class CodexPlanningService(
             {
             }
         }
+    }
+
+    private async Task<CodexSessionRequest>
+        ResolveSupervisorSessionRequestAsync(
+            Mission mission,
+            CancellationToken cancellationToken)
+    {
+        if (mission.Policy.SessionReuse ==
+            SessionReuseMode.Disabled)
+        {
+            return CodexSessionRequest.EphemeralFresh;
+        }
+
+        var sessions = await store.ListAgentSessionsAsync(
+            mission.Id,
+            cancellationToken);
+
+        var activeSupervisors = sessions
+            .Where(session =>
+                session.Role == AgentSessionRole.Supervisor &&
+                session.Persistent &&
+                session.Status == AgentSessionStatus.Active)
+            .OrderByDescending(session => session.LastUsedAtUtc)
+            .ThenByDescending(session => session.CreatedAtUtc)
+            .ToArray();
+
+        foreach (var stale in activeSupervisors.Where(
+                     session =>
+                         string.IsNullOrWhiteSpace(
+                             session.ThreadId)))
+        {
+            await store.SaveAgentSessionAsync(
+                stale with
+                {
+                    Status = AgentSessionStatus.Invalidated,
+                    ClosedAtUtc = DateTimeOffset.UtcNow,
+                    TerminationReason =
+                        "Persistent supervisor session has no resumable Codex thread id."
+                },
+                cancellationToken);
+        }
+
+        var resumable = activeSupervisors
+            .Where(session =>
+                !string.IsNullOrWhiteSpace(
+                    session.ThreadId))
+            .ToArray();
+
+        var selected = resumable.FirstOrDefault();
+
+        if (selected is null)
+        {
+            return CodexSessionRequest.NewPersistent;
+        }
+
+        foreach (var superseded in resumable.Skip(1))
+        {
+            await store.SaveAgentSessionAsync(
+                superseded with
+                {
+                    Status = AgentSessionStatus.Invalidated,
+                    ClosedAtUtc = DateTimeOffset.UtcNow,
+                    TerminationReason =
+                        $"Superseded by supervisor session '{selected.Id}'."
+                },
+                cancellationToken);
+        }
+
+        return CodexSessionRequest.Resume(
+            selected.Id,
+            selected.ThreadId!);
+    }
+
+    internal static CodexSessionRequest
+        SelectSupervisorSessionRequest(
+            MissionExecutionPolicy policy,
+            IReadOnlyList<AgentSession> sessions)
+    {
+        if (policy.SessionReuse ==
+            SessionReuseMode.Disabled)
+        {
+            return CodexSessionRequest.EphemeralFresh;
+        }
+
+        var selected = sessions
+            .Where(session =>
+                session.Role == AgentSessionRole.Supervisor &&
+                session.Persistent &&
+                session.Status == AgentSessionStatus.Active &&
+                !string.IsNullOrWhiteSpace(
+                    session.ThreadId))
+            .OrderByDescending(session => session.LastUsedAtUtc)
+            .ThenByDescending(session => session.CreatedAtUtc)
+            .FirstOrDefault();
+
+        return selected is null
+            ? CodexSessionRequest.NewPersistent
+            : CodexSessionRequest.Resume(
+                selected.Id,
+                selected.ThreadId!);
     }
 
     private async Task<AgentSession> PrepareSessionAsync(
