@@ -120,7 +120,24 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
         IEnumerable<string> arguments,
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
-        string? standardInput = null)
+        string? standardInput = null) =>
+        RunLoginShellExecutableStreamingAsync(
+            distribution,
+            executable,
+            arguments,
+            timeout,
+            cancellationToken,
+            standardInput,
+            null);
+
+    public Task<ProcessRunResult> RunLoginShellExecutableStreamingAsync(
+        string distribution,
+        string executable,
+        IEnumerable<string> arguments,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default,
+        string? standardInput = null,
+        Func<string, Task>? standardOutputLineHandler = null)
     {
         var commandParts = new List<string>
         {
@@ -130,12 +147,13 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
 
         commandParts.AddRange(arguments.Select(BashQuote));
 
-        return RunLoginShellCommandAsync(
+        return RunStreamingAsync(
             distribution,
-            string.Join(" ", commandParts),
+            ["bash", "-lc", string.Join(" ", commandParts)],
             timeout,
             cancellationToken,
-            standardInput);
+            standardInput,
+            standardOutputLineHandler);
     }
 
     public Task<ProcessRunResult> RunAsync(
@@ -143,7 +161,22 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
         IEnumerable<string> linuxArguments,
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
-        string? standardInput = null)
+        string? standardInput = null) =>
+        RunStreamingAsync(
+            distribution,
+            linuxArguments,
+            timeout,
+            cancellationToken,
+            standardInput,
+            null);
+
+    public Task<ProcessRunResult> RunStreamingAsync(
+        string distribution,
+        IEnumerable<string> linuxArguments,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default,
+        string? standardInput = null,
+        Func<string, Task>? standardOutputLineHandler = null)
     {
         var arguments = new List<string>
         {
@@ -154,13 +187,15 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
 
         arguments.AddRange(linuxArguments);
 
-        return processRunner.RunAsync(
+        return processRunner.RunStreamingAsync(
             "wsl.exe",
             arguments,
             Environment.CurrentDirectory,
             timeout,
             cancellationToken,
-            standardInput);
+            standardInput,
+            null,
+            standardOutputLineHandler);
     }
 
     public async Task<string> ConvertWindowsPathAsync(

@@ -62,9 +62,21 @@ The planner chooses between:
 
 A self-hosting rule warns the planner that the currently running LoopGolem Worker does not hot-reload changes made to its own runtime projects.
 
+## Session transport
+
+LoopGolem has three explicit Codex CLI transport modes:
+
+- `FreshEphemeral`: starts a new `codex exec --ephemeral` thread. This remains the active mode for planner, worker and validator calls until session reuse is enabled by a later orchestration step.
+- `NewPersistent`: starts a new non-ephemeral Codex thread. When the JSONL stream emits `thread.started`, LoopGolem persists the provider thread id immediately instead of waiting for the Codex process to exit.
+- `Resume`: resumes a previously persisted provider thread with `codex exec ... resume <thread-id> -`. The logical LoopGolem session must still be active and its role, model and reasoning effort must match the requested turn.
+
+The transport reads JSONL stdout incrementally. Persistent thread identity is therefore crash-safe once `thread.started` has been observed. Completed turns persist duration and token dimensions in `agent_turns`.
+
+This transport support does not by itself enable context reuse. The current orchestration policy still sends planner, Luna Low worker and validator calls through `FreshEphemeral`; persistent Supervisor/Worker session selection is implemented separately so it can be benchmarked as an independent variable.
+
 ## Luna Low workers
 
-Each Luna Low call is a fresh bounded task. It receives the microtask goal, read files, write allowlist and acceptance checks rather than the entire original mission context.
+Each Luna Low call is currently a fresh bounded task. It receives the microtask goal, read files, write allowlist and acceptance checks rather than the entire original mission context.
 
 Codex is instructed not to commit, push, create branches or rewrite Git history. LoopGolem verifies the actual changed files after every worker call and rejects edits outside the task's write allowlist.
 
@@ -88,7 +100,7 @@ Correction batches use the same deterministic/Luna Low task format. LoopGolem ru
 
 ## Permission model
 
-Luna Low runs with `workspace-write` sandboxing, network disabled and approval policy `never`. Planning and validation run read-only. Apps, plugins and multi-agent mode are disabled.
+Luna Low runs with `workspace-write` sandboxing, network disabled and approval policy `never`. Planning and validation run read-only. Apps, plugins, multi-agent mode and Codex memories are explicitly disabled. Disabling memories keeps future session-reuse experiments focused on thread context rather than a second persistent-memory mechanism.
 
 ## Worktree safety
 
@@ -100,10 +112,12 @@ Before each Luna Low call, LoopGolem persists a Git workspace baseline in missio
 
 ## Token usage telemetry
 
-LoopGolem invokes autonomous `codex exec` calls with JSON event output enabled and reads token usage from the completed-turn event. It persists input, cached-input, output, optional reasoning-output, and total-token counts per mission task. Cached input is a subset of input and is not added a second time when computing totals. If the CLI does not provide `total_tokens`, LoopGolem computes the task-call total as input plus output.
+LoopGolem invokes autonomous `codex exec` calls with JSON event output enabled and reads token usage from the completed-turn event. It persists input, cached-input, cache-write-input, output, reasoning-output and comparable total-token counts. Cached input is a subset of input and is not added a second time when computing totals. If the CLI does not provide `total_tokens`, LoopGolem computes the call total as input plus output.
 
-Token usage is accumulated across completed retries for the same task and summed across tasks for the mission total shown in the Desktop. If the Worker or Codex process is terminated before a usage event is returned, LoopGolem does not invent an estimate for that interrupted call.
+Every Codex call also receives a logical session and turn record containing role/purpose, model, reasoning effort, turn number and duration. Calls that still use `FreshEphemeral` close their logical session after the single turn; persistent modes keep the logical session active for later resume.
+
+Task-level token usage remains available for mission execution and Desktop rollups, while `agent_sessions` and `agent_turns` preserve the richer dimensions needed for controlled benchmark analysis. If the Worker or Codex process is terminated before a usage event is returned, LoopGolem does not invent an estimate for that interrupted call; an incomplete turn can remain persisted for recovery analysis.
 
 ## Future direction
 
-The integration can later move to Codex app-server or the official SDK for richer streaming, lifecycle control, quota telemetry and resumable sessions without changing mission semantics.
+The CLI transport now has the primitives needed for resumable sessions without changing mission semantics. A future migration to Codex app-server or an official SDK remains possible if LoopGolem later needs richer lifecycle control or quota telemetry that the CLI cannot expose.
