@@ -66,6 +66,8 @@ public sealed partial class SqliteMissionStore
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
                 total_tokens INTEGER NOT NULL DEFAULT 0,
+                context_reuse_recommended INTEGER NULL,
+                context_reuse_reason TEXT NULL,
                 FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
                 FOREIGN KEY (task_id) REFERENCES mission_tasks(id) ON DELETE SET NULL,
                 FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE,
@@ -111,6 +113,18 @@ public sealed partial class SqliteMissionStore
             "mission_task_attempts",
             "failure_kind",
             "TEXT NOT NULL DEFAULT 'None'",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "agent_turns",
+            "context_reuse_recommended",
+            "INTEGER NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "agent_turns",
+            "context_reuse_reason",
+            "TEXT NULL",
             cancellationToken);
     }
 
@@ -311,12 +325,14 @@ public sealed partial class SqliteMissionStore
                 id, mission_id, task_id, session_id, purpose, model, reasoning_effort,
                 turn_number, started_utc, completed_utc, duration_milliseconds,
                 input_tokens, cached_input_tokens, cache_write_input_tokens,
-                output_tokens, reasoning_output_tokens, total_tokens)
+                output_tokens, reasoning_output_tokens, total_tokens,
+                context_reuse_recommended, context_reuse_reason)
             VALUES (
                 $id, $missionId, $taskId, $sessionId, $purpose, $model, $reasoningEffort,
                 $turnNumber, $startedUtc, $completedUtc, $durationMilliseconds,
                 $inputTokens, $cachedInputTokens, $cacheWriteInputTokens,
-                $outputTokens, $reasoningOutputTokens, $totalTokens)
+                $outputTokens, $reasoningOutputTokens, $totalTokens,
+                $contextReuseRecommended, $contextReuseReason)
             ON CONFLICT(id) DO UPDATE SET
                 mission_id = excluded.mission_id,
                 task_id = excluded.task_id,
@@ -333,7 +349,9 @@ public sealed partial class SqliteMissionStore
                 cache_write_input_tokens = excluded.cache_write_input_tokens,
                 output_tokens = excluded.output_tokens,
                 reasoning_output_tokens = excluded.reasoning_output_tokens,
-                total_tokens = excluded.total_tokens;
+                total_tokens = excluded.total_tokens,
+                context_reuse_recommended = excluded.context_reuse_recommended,
+                context_reuse_reason = excluded.context_reuse_reason;
             """;
 
         command.Parameters.AddWithValue("$id", turn.Id);
@@ -357,6 +375,14 @@ public sealed partial class SqliteMissionStore
         command.Parameters.AddWithValue("$outputTokens", turn.OutputTokens);
         command.Parameters.AddWithValue("$reasoningOutputTokens", turn.ReasoningOutputTokens);
         command.Parameters.AddWithValue("$totalTokens", turn.TotalTokens);
+        command.Parameters.AddWithValue(
+            "$contextReuseRecommended",
+            turn.ContextReuseRecommended is { } recommended
+                ? recommended ? 1 : 0
+                : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$contextReuseReason",
+            (object?)turn.ContextReuseReason ?? DBNull.Value);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -371,7 +397,8 @@ public sealed partial class SqliteMissionStore
             SELECT id, mission_id, task_id, session_id, purpose, model, reasoning_effort,
                    turn_number, started_utc, completed_utc, duration_milliseconds,
                    input_tokens, cached_input_tokens, cache_write_input_tokens,
-                   output_tokens, reasoning_output_tokens, total_tokens
+                   output_tokens, reasoning_output_tokens, total_tokens,
+                   context_reuse_recommended, context_reuse_reason
             FROM agent_turns
             WHERE mission_id = $missionId
             ORDER BY started_utc, turn_number;
@@ -382,24 +409,35 @@ public sealed partial class SqliteMissionStore
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            results.Add(new AgentTurn(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.GetString(3),
-                Enum.Parse<AgentTurnPurpose>(reader.GetString(4)),
-                reader.GetString(5),
-                reader.GetString(6),
-                reader.GetInt32(7),
-                ParseTimestamp(reader.GetString(8)),
-                reader.IsDBNull(9) ? null : ParseTimestamp(reader.GetString(9)),
-                reader.IsDBNull(10) ? null : reader.GetInt64(10),
-                reader.GetInt64(11),
-                reader.GetInt64(12),
-                reader.GetInt64(13),
-                reader.GetInt64(14),
-                reader.GetInt64(15),
-                reader.GetInt64(16)));
+            results.Add(
+                new AgentTurn(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.GetString(3),
+                    Enum.Parse<AgentTurnPurpose>(reader.GetString(4)),
+                    reader.GetString(5),
+                    reader.GetString(6),
+                    reader.GetInt32(7),
+                    ParseTimestamp(reader.GetString(8)),
+                    reader.IsDBNull(9) ? null : ParseTimestamp(reader.GetString(9)),
+                    reader.IsDBNull(10) ? null : reader.GetInt64(10),
+                    reader.GetInt64(11),
+                    reader.GetInt64(12),
+                    reader.GetInt64(13),
+                    reader.GetInt64(14),
+                    reader.GetInt64(15),
+                    reader.GetInt64(16))
+                {
+                    ContextReuseRecommended =
+                        reader.IsDBNull(17)
+                            ? null
+                            : reader.GetInt64(17) != 0,
+                    ContextReuseReason =
+                        reader.IsDBNull(18)
+                            ? null
+                            : reader.GetString(18)
+                });
         }
 
         return results;
