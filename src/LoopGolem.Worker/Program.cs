@@ -80,7 +80,15 @@ var recoveryTask = Task.Run(
     () => orchestrator.ResumePendingAsync(shutdown.Token),
     shutdown.Token);
 
-var server = new WorkerPipeServer(store, orchestrator, codex);
+var telemetry =
+    new MissionTelemetryService(
+        store);
+var server =
+    new WorkerPipeServer(
+        store,
+        orchestrator,
+        codex,
+        telemetry);
 
 try
 {
