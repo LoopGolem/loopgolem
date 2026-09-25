@@ -129,6 +129,13 @@ public static class MissionPlanValidator
                 return $"Task '{task.Id}' may set rerunAfterRepair only for deterministic work.";
             }
 
+            if (task.RerunAfterRepair &&
+                task.Deterministic.Kind !=
+                    DeterministicOperationKinds.RunCommand)
+            {
+                return $"Task '{task.Id}' may set rerunAfterRepair only for deterministic run_command work.";
+            }
+
             var deterministicError = ValidateDeterministic(task);
             if (deterministicError is not null)
             {
