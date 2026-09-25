@@ -7,6 +7,7 @@ public enum RecoveryCycleStatus
     Repairing,
     Retrying,
     Succeeded,
+    Failed,
     Exhausted
 }
 
@@ -21,3 +22,37 @@ public sealed record RecoveryCycle(
     IReadOnlyList<string> RepairTaskIds,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc);
+
+public sealed record RecoveryPlan(
+    string Summary,
+    IReadOnlyList<PlannedTask> Tasks);
+
+public sealed record RecoveryPlanningResult(
+    bool Success,
+    string Summary,
+    IReadOnlyList<PlannedTask> Tasks,
+    string? Error,
+    string? RecoveryTurnId)
+{
+    public static RecoveryPlanningResult Succeeded(
+        string summary,
+        IReadOnlyList<PlannedTask> tasks,
+        string? recoveryTurnId) =>
+        new(
+            true,
+            summary,
+            tasks,
+            null,
+            recoveryTurnId);
+
+    public static RecoveryPlanningResult Failed(
+        string summary,
+        string error,
+        string? recoveryTurnId = null) =>
+        new(
+            false,
+            summary,
+            [],
+            error,
+            recoveryTurnId);
+}
