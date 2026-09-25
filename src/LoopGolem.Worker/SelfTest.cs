@@ -1235,6 +1235,119 @@ internal static class SelfTest
     private const string PreparedRecoveryContext =
         "self-test-persisted-baseline";
 
+    private static bool VerifyCapabilityPrompts(
+        string workspace)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var mission = new Mission(
+            "capability-prompt-test",
+            "Use host verification when agent tools are unavailable.",
+            workspace,
+            MissionExecutionMode.Codex,
+            MissionStatus.Running,
+            null,
+            null,
+            now,
+            now)
+        {
+            Capabilities = FakeCapabilitySnapshot()
+        };
+
+        var workerTask = new PlannedTask(
+            "capability-worker",
+            "Edit one file",
+            PlannedExecutorKinds.LunaLow,
+            "Edit Demo.csproj.",
+            ["Demo.csproj"],
+            ["Demo.csproj"],
+            ["Host build will verify the result."],
+            [],
+            new DeterministicOperation(
+                DeterministicOperationKinds.None,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                [],
+                string.Empty,
+                30));
+
+        var plannerPrompt =
+            CodexPlanningService.BuildPlannerPrompt(mission);
+        var workerPrompt =
+            CodexPlanningService.BuildWorkerPrompt(
+                mission,
+                workerTask);
+
+        if (!plannerPrompt.Contains(
+                "agentEnvironment",
+                StringComparison.Ordinal) ||
+            !plannerPrompt.Contains(
+                "hostEnvironment",
+                StringComparison.Ordinal) ||
+            !plannerPrompt.Contains(
+                "deterministic run_command checkpoints",
+                StringComparison.Ordinal) ||
+            !workerPrompt.Contains(
+                "You execute inside agentEnvironment, not hostEnvironment.",
+                StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "Self-test capability separation is missing from Codex prompts.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static MissionCapabilitySnapshot FakeCapabilitySnapshot()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        return new MissionCapabilitySnapshot(
+            new ExecutionEnvironmentCapabilities(
+                ExecutionEnvironmentKind.Agent,
+                "wsl2",
+                "Linux (WSL2)",
+                "self-test",
+                [
+                    new ToolCapability(
+                        "git",
+                        true,
+                        "git version self-test",
+                        null),
+                    new ToolCapability(
+                        "dotnet",
+                        false,
+                        null,
+                        "dotnet is not installed in the agent environment."),
+                    new ToolCapability(
+                        "codex",
+                        true,
+                        "codex-cli self-test",
+                        "Authenticated with ChatGPT.")
+                ]),
+            new ExecutionEnvironmentCapabilities(
+                ExecutionEnvironmentKind.Host,
+                "native/X64",
+                "Self-test host",
+                null,
+                [
+                    new ToolCapability(
+                        "git",
+                        true,
+                        "git version self-test",
+                        null),
+                    new ToolCapability(
+                        "dotnet",
+                        true,
+                        "10.0.self-test",
+                        null)
+                ]),
+            now);
+    }
+
     private static bool VerifySelfHostingPrompts(
         string workspace,
         string baseCommit,
