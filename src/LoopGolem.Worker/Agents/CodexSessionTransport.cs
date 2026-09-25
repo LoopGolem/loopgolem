@@ -116,36 +116,11 @@ public sealed class CodexSessionTransport(
                     out var threadId))
             {
                 observedThreadId = threadId;
-
-                if (request.SessionMode == CodexSessionMode.Resume &&
-                    !string.Equals(
-                        session.ProviderThreadId,
-                        threadId,
-                        StringComparison.Ordinal))
-                {
-                    throw new InvalidDataException(
-                        $"Codex resumed thread '{threadId}', but LoopGolem expected '{session.ProviderThreadId}'.");
-                }
-
-                if (request.SessionMode ==
-                    CodexSessionMode.NewPersistent)
-                {
-                    var now = DateTimeOffset.UtcNow;
-                    session = session with
-                    {
-                        ProviderThreadId = threadId,
-                        LastUsedAtUtc = now,
-                        UpdatedAtUtc = now
-                    };
-
-                    // Deliberately do not use the caller token here. Once Codex
-                    // has announced a persistent thread id, recording it is
-                    // part of crash-safe state capture even if cancellation is
-                    // requested immediately afterwards.
-                    await store.UpsertAgentSessionAsync(
+                session =
+                    await CaptureThreadStartedAsync(
+                        request.SessionMode,
                         session,
-                        CancellationToken.None);
-                }
+                        threadId!);
             }
 
             if (TryParseTokenUsageLine(
@@ -328,6 +303,51 @@ public sealed class CodexSessionTransport(
             {
             }
         }
+    }
+
+    internal async Task<AgentSession>
+        CaptureThreadStartedAsync(
+            CodexSessionMode sessionMode,
+            AgentSession session,
+            string threadId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(
+            threadId);
+
+        if (sessionMode ==
+                CodexSessionMode.Resume &&
+            !string.Equals(
+                session.ProviderThreadId,
+                threadId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Codex resumed thread '{threadId}', but LoopGolem expected '{session.ProviderThreadId}'.");
+        }
+
+        if (sessionMode !=
+            CodexSessionMode.NewPersistent)
+        {
+            return session;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var updated = session with
+        {
+            ProviderThreadId = threadId,
+            LastUsedAtUtc = now,
+            UpdatedAtUtc = now
+        };
+
+        // Deliberately do not use the caller token here. Once Codex has
+        // announced a persistent thread id, recording it is part of
+        // crash-safe state capture even if cancellation is requested
+        // immediately afterwards.
+        await store.UpsertAgentSessionAsync(
+            updated,
+            CancellationToken.None);
+
+        return updated;
     }
 
     private async Task<AgentSession> ResolveSessionAsync(
