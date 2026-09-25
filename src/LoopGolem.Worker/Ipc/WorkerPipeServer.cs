@@ -201,7 +201,7 @@ public sealed class WorkerPipeServer(
                     true,
                     Mission: snapshot,
                     Telemetry: await telemetry.GetSummaryAsync(
-                        snapshot.Mission.Id,
+                        snapshot,
                         cancellationToken));
             }
 
@@ -226,7 +226,7 @@ public sealed class WorkerPipeServer(
                         true,
                         Mission: snapshot,
                         Telemetry: await telemetry.GetSummaryAsync(
-                            request.MissionId,
+                            snapshot,
                             cancellationToken));
             }
 
