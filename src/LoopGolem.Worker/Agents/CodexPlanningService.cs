@@ -463,7 +463,8 @@ public sealed class CodexPlanningService(
             _ => TaskExecutionResult.Failed(
                 "Luna Low returned an unsupported outcome.",
                 outcome.Outcome,
-                run.Details)
+                run.Details,
+                run.TokenUsage)
         };
     }
 
