@@ -26,6 +26,18 @@ The current Codex execution architecture follows the principle: expensive intell
 10. If validation returns `ok`, the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
 11. Corrections are executed and validated again. After three validator cycles without approval, the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
 
+## Deterministic recovery
+
+Known deterministic process failures do not immediately terminate a Codex mission. A completed non-zero `run_command` / .NET build (or a controlled timeout) is persisted as a failed `MissionTaskAttempt` with its process evidence, and the original task enters `RecoveryPending`.
+
+Recovery is provider-independent at the orchestrator boundary through `IMissionRecoveryPlanner`. The Worker adapter implements that contract with the mission's existing persistent GPT-6 Luna High Supervisor. A recovery turn is read-only and produces at most 12 bounded Luna Low repair microtasks. Repair task IDs are namespaced by the failed task and cycle so multiple failed checks cannot collide.
+
+The persisted cycle progresses through `Pending -> Planning -> Repairing -> Retrying`. After repairs complete, the orchestrator marks the cycle `Retrying` before making the original task runnable again. The same task record, deterministic definition, and execution context are reused. `DotNetBuildExecutor` persists the selected solution/project before its first attempt, so a repair cannot alter which target the recheck builds.
+
+If the exact recheck fails again, the completed cycle is recorded as failed and a new cycle is created. The mission-level `MaxRecoveryCycles` policy defaults to 3; reaching the limit marks the cycle `Exhausted`, escalates the original task, and stops in `NeedsHumanAttention`. A repair microtask failure is also conservative and stops for human attention instead of recursively spawning another repair tree.
+
+Recovery is restart-safe. Task attempts, cycle status, repair task IDs, failure evidence, Supervisor turns, and task execution contexts are persisted. On Worker restart, a completed deterministic attempt is reconciled before replay: known success completes the task, and known recoverable failure restores `RecoveryPending`. An arbitrary `run_command` that was interrupted without a completed process outcome remains non-replayable because its side effects are unknown.
+
 ## Git snapshots
 
 Validation snapshots are Git commit objects created with a temporary alternate index. They are intentionally unreachable: no branch or tag is updated. Git may garbage-collect these objects later.
@@ -47,7 +59,7 @@ SQLite uses WAL mode. UI clients do not open the database directly. Planner task
 
 Mission capability snapshots are stored separately from the mutable mission snapshot. This prevents normal orchestrator updates from overwriting adapter-level environment evidence and ensures a restarted Worker continues with the same agent/host capability assumptions.
 
-Each mission task has a persisted execution-attempt count, initialized to zero. The count increments before an executor is invoked, and increments again when a task in `Running` or `Retrying` is resumed after a Worker restart. SQLite schema migration adds this persisted state while preserving compatibility with existing databases.
+Each mission task has a persisted execution-attempt count plus normalized `mission_task_attempts` rows. Attempt numbers are allocated from the greater of task state and persisted history, which prevents logical-number reuse after restart or database migration. Attempts record running/succeeded/failed/interrupted outcome, failure classification, timestamps, and available evidence.
 
 Completed Codex calls also persist token usage on the task: input, cached input, output, optional reasoning output, and total tokens. Usage is accumulated when a task has more than one completed Codex attempt. Deterministic tasks consume no model tokens. The Desktop shows per-task totals and the aggregate mission total.
 
