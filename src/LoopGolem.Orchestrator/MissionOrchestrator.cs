@@ -36,7 +36,8 @@ public sealed partial class MissionOrchestrator : IMissionOrchestrator
         string goal,
         string workspacePath,
         MissionExecutionMode executionMode,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        MissionPolicy? policy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(goal);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
@@ -53,7 +54,12 @@ public sealed partial class MissionOrchestrator : IMissionOrchestrator
                 null,
                 null,
                 now,
-                now),
+                now)
+            {
+                Policy =
+                    policy ??
+                    MissionPolicy.Default
+            },
             CreateInitialPlan(missionId, executionMode, now));
 
         snapshot = UpdateReadyStates(snapshot, now);

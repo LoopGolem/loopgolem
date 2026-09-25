@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Text.Json;
+using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
 
 namespace LoopGolem.Desktop.Ipc;
@@ -26,14 +27,16 @@ public sealed class WorkerPipeClient
     public Task<WorkerResponse> CreateMissionAsync(
         string goal,
         string workspacePath,
-        LoopGolem.Core.Domain.MissionExecutionMode executionMode,
+        MissionExecutionMode executionMode,
+        SessionReuseMode? sessionReuse = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             new WorkerRequest(
                 WorkerProtocol.CreateMission,
                 Goal: goal,
                 WorkspacePath: workspacePath,
-                ExecutionMode: executionMode),
+                ExecutionMode: executionMode,
+                SessionReuse: sessionReuse),
             cancellationToken);
 
     public Task<WorkerResponse> GetMissionAsync(

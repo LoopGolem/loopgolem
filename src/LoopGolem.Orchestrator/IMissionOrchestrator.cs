@@ -8,7 +8,8 @@ public interface IMissionOrchestrator
         string goal,
         string workspacePath,
         MissionExecutionMode executionMode,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        MissionPolicy? policy = null);
 
     Task<MissionSnapshot?> RunMissionAsync(
         string missionId,

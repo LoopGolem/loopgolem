@@ -1,14 +1,17 @@
 using System.IO.Pipes;
 using System.Text.Json;
+using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
 using LoopGolem.Orchestrator;
+using LoopGolem.Worker.Infrastructure;
 
 namespace LoopGolem.Worker.Ipc;
 
 public sealed class WorkerPipeServer(
     IMissionStore store,
     IMissionOrchestrator orchestrator,
-    LoopGolem.Worker.Agents.CodexCliService codex)
+    LoopGolem.Worker.Agents.CodexCliService codex,
+    MissionTelemetryService telemetry)
 {
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
@@ -177,14 +180,29 @@ public sealed class WorkerPipeServer(
                         "A valid workspace directory is required.");
                 }
 
+                var policy =
+                    request.SessionReuse is { } sessionReuse
+                        ? MissionPolicy.Default with
+                        {
+                            SessionReuse =
+                                sessionReuse
+                        }
+                        : null;
+
                 var snapshot = await orchestrator.CreateMissionAsync(
                     request.Goal,
                     request.WorkspacePath,
                     request.ExecutionMode,
-                    cancellationToken);
+                    cancellationToken,
+                    policy);
 
                 _ = ExecuteMissionSafelyAsync(snapshot.Mission.Id);
-                return new WorkerResponse(true, Mission: snapshot);
+                return new WorkerResponse(
+                    true,
+                    Mission: snapshot,
+                    Telemetry: await telemetry.GetSummaryAsync(
+                        snapshot,
+                        cancellationToken));
             }
 
             case WorkerProtocol.GetMission:
@@ -204,7 +222,12 @@ public sealed class WorkerPipeServer(
                     ? Error(
                         WorkerErrorCodes.MissionNotFound,
                         "Mission not found.")
-                    : new WorkerResponse(true, Mission: snapshot);
+                    : new WorkerResponse(
+                        true,
+                        Mission: snapshot,
+                        Telemetry: await telemetry.GetSummaryAsync(
+                            snapshot,
+                            cancellationToken));
             }
 
             default:

@@ -28,7 +28,7 @@ jobs:
         run: dotnet restore LoopGolem.sln
 
       - name: Build
-        run: dotnet build LoopGolem.sln --configuration Release --no-restore
+        run: dotnet build LoopGolem.sln --configuration Release --no-restore -p:TreatWarningsAsErrors=true
 
       - name: Worker self-test
         run: dotnet run --project src/LoopGolem.Worker/LoopGolem.Worker.csproj --configuration Release --no-build -- --self-test

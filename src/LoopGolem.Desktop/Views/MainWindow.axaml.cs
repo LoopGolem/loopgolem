@@ -63,6 +63,8 @@ public partial class MainWindow : Window
         CodexLabel.Text = $"{LocalizationService.Get("Codex")}:";
         CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
         UseCodexCheckBox.Content = LocalizationService.Get("UseCodex");
+        ReuseLowContextCheckBox.Content =
+            LocalizationService.Get("ReuseLowContext");
         WorkspaceLabel.Text = LocalizationService.Get("Workspace");
         BrowseButton.Content = LocalizationService.Get("Browse");
         MissionGoalLabel.Text = LocalizationService.Get("MissionGoal");
@@ -70,10 +72,12 @@ public partial class MainWindow : Window
         MissionStatusLabel.Text = $"{LocalizationService.Get("MissionStatus")}:";
         MissionStatusValue.Text = LocalizationService.Get("Ready");
         TasksLabel.Text = LocalizationService.Get("Tasks");
+        TelemetryLabel.Text = LocalizationService.Get("Telemetry");
         MissionResultLabel.Text = LocalizationService.Get("MissionResult");
         SettingsButton.Content = LocalizationService.Get("Settings");
         StartButton.Content = LocalizationService.Get("StartMission");
         MissionResultText.Text = string.Empty;
+        TelemetryText.Text = string.Empty;
         RenderTasks([]);
     }
 
@@ -176,10 +180,12 @@ public partial class MainWindow : Window
             status?.Message ?? LocalizationService.Get("CodexUnavailable"));
 
         UseCodexCheckBox.IsEnabled = _codexReady;
+        ReuseLowContextCheckBox.IsEnabled = _codexReady;
 
         if (!_codexReady)
         {
             UseCodexCheckBox.IsChecked = false;
+            ReuseLowContextCheckBox.IsEnabled = false;
         }
     }
 
@@ -204,6 +210,7 @@ public partial class MainWindow : Window
         WorkspaceBox.Text = selected;
         MissionStatusValue.Text = LocalizationService.Get("Ready");
         MissionResultText.Text = string.Empty;
+        TelemetryText.Text = string.Empty;
         RenderTasks([]);
         UpdateStartButtonState();
     }
@@ -231,6 +238,7 @@ public partial class MainWindow : Window
 
         StartButton.IsEnabled = false;
         MissionResultText.Text = string.Empty;
+        TelemetryText.Text = string.Empty;
         RenderTasks([]);
         MissionStatusValue.Text = LocalizationService.Get("Planning");
 
@@ -242,7 +250,12 @@ public partial class MainWindow : Window
                 _workspacePath,
                 UseCodexCheckBox.IsChecked == true
                     ? MissionExecutionMode.Codex
-                    : MissionExecutionMode.ValidateOnly);
+                    : MissionExecutionMode.ValidateOnly,
+                UseCodexCheckBox.IsChecked == true
+                    ? ReuseLowContextCheckBox.IsChecked == true
+                        ? SessionReuseMode.Affinity
+                        : SessionReuseMode.Disabled
+                    : null);
         }
         catch
         {
@@ -263,6 +276,9 @@ public partial class MainWindow : Window
         }
 
         RenderTasks(response.Mission.Tasks);
+        RenderTelemetry(
+            response.Telemetry,
+            response.Mission.Mission.Policy.SessionReuse);
         _activeMissionId = response.Mission.Mission.Id;
 
         _missionPolling?.Cancel();
@@ -319,6 +335,9 @@ public partial class MainWindow : Window
             var mission = response.Mission.Mission;
             MissionStatusValue.Text = GetMissionStatusText(mission.Status);
             RenderTasks(response.Mission.Tasks);
+            RenderTelemetry(
+                response.Telemetry,
+                mission.Policy.SessionReuse);
 
             if (!string.IsNullOrWhiteSpace(mission.Result))
             {
@@ -444,6 +463,7 @@ public partial class MainWindow : Window
             DomainTaskStatus.Running => "Running",
             DomainTaskStatus.Verifying => "Verifying",
             DomainTaskStatus.Retrying => "Retrying",
+            DomainTaskStatus.RecoveryPending => "RecoveryPending",
             DomainTaskStatus.Escalated => "Escalated",
             DomainTaskStatus.Completed => "Completed",
             DomainTaskStatus.Blocked => "Blocked",
@@ -459,10 +479,115 @@ public partial class MainWindow : Window
             DomainTaskStatus.Running => "●",
             DomainTaskStatus.Verifying => "◐",
             DomainTaskStatus.Retrying => "↻",
+            DomainTaskStatus.RecoveryPending => "⟳",
             DomainTaskStatus.Blocked => "!",
             DomainTaskStatus.Escalated => "↑",
             _ => "○"
         };
+
+    private void RenderTelemetry(
+        MissionTelemetrySummary? telemetry,
+        SessionReuseMode sessionReuse)
+    {
+        if (telemetry is null)
+        {
+            TelemetryText.Text = string.Empty;
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            $"{LocalizationService.Get("WorkerContext")}: " +
+            LocalizationService.Get(
+                sessionReuse == SessionReuseMode.Affinity
+                    ? "Affinity"
+                    : "FreshPerTask") +
+            $" · {LocalizationService.Get("Elapsed")}: " +
+            FormatDuration(
+                telemetry.DurationMilliseconds),
+
+            $"{LocalizationService.Get("TotalTokens")}: " +
+            $"{FormatTokenCount(telemetry.TotalTokens)} · " +
+            $"{LocalizationService.Get("InputTokens")}: " +
+            $"{FormatPlainNumber(telemetry.InputTokens)} · " +
+            $"{LocalizationService.Get("CachedInputTokens")}: " +
+            $"{FormatPlainNumber(telemetry.CachedInputTokens)} · " +
+            $"{LocalizationService.Get("CacheWriteInputTokens")}: " +
+            $"{FormatPlainNumber(telemetry.CacheWriteInputTokens)} · " +
+            $"{LocalizationService.Get("OutputTokens")}: " +
+            $"{FormatPlainNumber(telemetry.OutputTokens)} · " +
+            $"{LocalizationService.Get("ReasoningTokens")}: " +
+            $"{FormatPlainNumber(telemetry.ReasoningOutputTokens)}",
+
+            $"{LocalizationService.Get("Sessions")}: {FormatPlainNumber(telemetry.Sessions)} " +
+            $"({LocalizationService.Get("Active")}: {FormatPlainNumber(telemetry.ActiveSessions)}, " +
+            $"{LocalizationService.Get("Invalidated")}: {FormatPlainNumber(telemetry.InvalidatedSessions)}) · " +
+            $"{LocalizationService.Get("Turns")}: {FormatPlainNumber(telemetry.Turns)}",
+
+            $"{LocalizationService.Get("WorkerReuse")}: " +
+            $"{FormatPlainNumber(telemetry.WorkerReusedTurns)} " +
+            $"{LocalizationService.Get("ResumedTurns")} · " +
+            $"{FormatPlainNumber(telemetry.WorkerReuseRecommendedTurns)} " +
+            $"{LocalizationService.Get("ReuseHints")}",
+
+            $"{LocalizationService.Get("RecoveryCycles")}: " +
+            $"{FormatPlainNumber(telemetry.RecoveryCycles)} · " +
+            $"{LocalizationService.Get("Successful")}: " +
+            $"{FormatPlainNumber(telemetry.SuccessfulRecoveryCycles)} · " +
+            $"{LocalizationService.Get("Exhausted")}: " +
+            $"{FormatPlainNumber(telemetry.ExhaustedRecoveryCycles)}"
+        };
+
+        var roles = telemetry.Roles
+            .OrderBy(role => role.Role)
+            .Select(role =>
+                $"{GetRoleDisplayName(role.Role)}: " +
+                $"{FormatPlainNumber(role.Turns)} " +
+                $"{LocalizationService.Get("Turns").ToLower(LocalizationService.CurrentCulture)} / " +
+                $"{FormatTokenCount(role.TotalTokens)}")
+            .ToArray();
+
+        if (roles.Length > 0)
+        {
+            lines.Add(
+                $"{LocalizationService.Get("ByRole")}: " +
+                string.Join(" · ", roles));
+        }
+
+        TelemetryText.Text =
+            string.Join(
+                Environment.NewLine,
+                lines);
+    }
+
+    private static string GetRoleDisplayName(
+        AgentSessionRole role) =>
+        LocalizationService.Get(role switch
+        {
+            AgentSessionRole.Supervisor => "Supervisor",
+            AgentSessionRole.Worker => "Worker",
+            AgentSessionRole.Validator => "Validator",
+            _ => role.ToString()
+        });
+
+    private static string FormatDuration(
+        long durationMilliseconds)
+    {
+        var duration =
+            TimeSpan.FromMilliseconds(
+                Math.Max(
+                    0,
+                    durationMilliseconds));
+
+        return duration.TotalHours >= 1
+            ? $"{(int)duration.TotalHours}:{duration.Minutes:00}:{duration.Seconds:00}"
+            : $"{duration.Minutes}:{duration.Seconds:00}";
+    }
+
+    private static string FormatPlainNumber(long value) =>
+        value.ToString(
+            "N0",
+            LocalizationService.CurrentCulture);
 
     private static string BuildDisplayResult(
         IEnumerable<MissionTask> tasks)

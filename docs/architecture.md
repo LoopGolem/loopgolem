@@ -79,6 +79,8 @@ The mission Validator is a distinct persistent `AgentSessionRole.Validator`. The
 
 Worker `AgentSession` rows additionally persist lease owner, accepted microtask count and termination reason. Worker `AgentTurn` rows persist the model's reuse hint alongside normal token telemetry, which allows benchmark analysis to compare fresh and resumed work by session and turn.
 
+The Worker exposes a read-only mission telemetry summary over IPC. The Desktop shows wall time; input, cached-input, cache-write-input, output, reasoning-output and total tokens; session/turn counts; Worker reuse counts; recovery counts; and per-role totals. The mission's persisted Worker context mode is shown alongside the metrics. The controlled benchmark procedure is defined in `docs/benchmark-v2.md`.
+
 Before a Luna Low task begins, LoopGolem persists a Git workspace baseline. If the Worker stops mid-task, the resumed attempt reuses that original baseline and enters `Retrying`, so edits made before the crash cannot disappear into a new baseline. Deterministic `write_file` and `create_directory` operations are naturally replayable. `rename_path` stores enough pre-execution state to recognize a rename that completed before persistence. An interrupted arbitrary `run_command` is not replayed automatically because its side effects may already have occurred; the mission stops in `NeedsHumanAttention`.
 
 ## IPC
