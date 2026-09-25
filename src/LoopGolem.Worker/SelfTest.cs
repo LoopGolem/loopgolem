@@ -1029,6 +1029,7 @@ internal static class SelfTest
         [
             new WorkspaceInspectionExecutor(),
             new ProjectDiscoveryExecutor(),
+            new FakeCapabilityExecutor(),
             new FakePlannerExecutor(
                 baseCommit,
                 plan),
