@@ -134,6 +134,12 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyWorkerSessionAffinityAsync(
+                    root))
+            {
+                return 1;
+            }
+
             if (!await VerifyAutomaticDeterministicRecoveryAsync(
                     root))
             {
@@ -2184,6 +2190,9 @@ internal static class SelfTest
                 StringComparison.Ordinal) ||
             !validatorPrompt.Contains(
                 "Do not attempt a probed tool marked UNAVAILABLE",
+                StringComparison.Ordinal) ||
+            !workerPrompt.Contains(
+                "contextReuse.recommended",
                 StringComparison.Ordinal))
         {
             Console.Error.WriteLine(
@@ -2192,6 +2201,407 @@ internal static class SelfTest
         }
 
         return true;
+    }
+
+    private static async Task<bool>
+        VerifyWorkerSessionAffinityAsync(
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "worker-affinity.db");
+        var workspace = Path.Combine(
+            root,
+            "worker-affinity-workspace");
+        Directory.CreateDirectory(workspace);
+
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        var missionId =
+            $"worker-affinity-{Guid.NewGuid():N}";
+        var policy =
+            MissionPolicy.Default with
+            {
+                SessionReuse =
+                    SessionReuseMode.Affinity,
+                MaxWorkerSessionMicrotasks = 3,
+                MaxWorkerSessionIdleMinutes = 30,
+                MaxActiveWorkerSessions = 4
+            };
+        var mission =
+            new Mission(
+                missionId,
+                "Verify bounded Luna Low session affinity.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now)
+            {
+                Policy = policy
+            };
+
+        var first =
+            CreateAffinityTask(
+                missionId,
+                1,
+                "affinity-first",
+                [],
+                ["src/feature.cs"],
+                []);
+        var second =
+            CreateAffinityTask(
+                missionId,
+                2,
+                "affinity-second",
+                ["src/feature.cs"],
+                ["src/feature.cs"],
+                ["affinity-first"]);
+        var third =
+            CreateAffinityTask(
+                missionId,
+                3,
+                "affinity-third",
+                ["src/feature.cs"],
+                ["src/feature.cs"],
+                ["affinity-second"]);
+        var fourth =
+            CreateAffinityTask(
+                missionId,
+                4,
+                "affinity-fourth",
+                ["src/feature.cs"],
+                ["src/feature.cs"],
+                ["affinity-third"]);
+        var unrelated =
+            CreateAffinityTask(
+                missionId,
+                5,
+                "affinity-unrelated",
+                ["docs/other.md"],
+                ["docs/other.md"],
+                []);
+
+        await store.CreateAsync(
+            new MissionSnapshot(
+                mission,
+                [
+                    first,
+                    second,
+                    third,
+                    fourth,
+                    unrelated
+                ]));
+
+        var transport =
+            new FakeWorkerAffinityTransport(
+                store);
+        var service =
+            new CodexWorkerSessionService(
+                transport,
+                store);
+
+        var firstRun =
+            await service.RunWorkAsync(
+                mission,
+                first,
+                CodexPlanningService.WorkerModel,
+                CodexPlanningService.WorkerReasoning,
+                "{}",
+                "first");
+        await service.CompleteWorkAsync(
+            mission,
+            firstRun,
+            true,
+            true,
+            "Useful feature context remains.");
+
+        var secondRun =
+            await service.RunWorkAsync(
+                mission,
+                second,
+                CodexPlanningService.WorkerModel,
+                CodexPlanningService.WorkerReasoning,
+                "{}",
+                "second");
+        await service.CompleteWorkAsync(
+            mission,
+            secondRun,
+            true,
+            true,
+            "Direct follow-up context remains.");
+
+        var thirdRun =
+            await service.RunWorkAsync(
+                mission,
+                third,
+                CodexPlanningService.WorkerModel,
+                CodexPlanningService.WorkerReasoning,
+                "{}",
+                "third");
+        await service.CompleteWorkAsync(
+            mission,
+            thirdRun,
+            true,
+            true,
+            "Context remains but cap should close the session.");
+
+        var fourthRun =
+            await service.RunWorkAsync(
+                mission,
+                fourth,
+                CodexPlanningService.WorkerModel,
+                CodexPlanningService.WorkerReasoning,
+                "{}",
+                "fourth");
+        await service.CompleteWorkAsync(
+            mission,
+            fourthRun,
+            true,
+            true,
+            "New bounded session.");
+
+        var unrelatedRun =
+            await service.RunWorkAsync(
+                mission,
+                unrelated,
+                CodexPlanningService.WorkerModel,
+                CodexPlanningService.WorkerReasoning,
+                "{}",
+                "unrelated");
+        await service.CompleteWorkAsync(
+            mission,
+            unrelatedRun,
+            true,
+            true,
+            "Unrelated context should start separately.");
+
+        var modes =
+            transport.Requests
+                .Take(5)
+                .Select(request =>
+                    request.SessionMode)
+                .ToArray();
+
+        if (!modes.SequenceEqual(
+                [
+                    CodexSessionMode.NewPersistent,
+                    CodexSessionMode.Resume,
+                    CodexSessionMode.Resume,
+                    CodexSessionMode.NewPersistent,
+                    CodexSessionMode.NewPersistent
+                ]) ||
+            firstRun.SessionId !=
+                secondRun.SessionId ||
+            firstRun.SessionId !=
+                thirdRun.SessionId ||
+            fourthRun.SessionId ==
+                firstRun.SessionId ||
+            unrelatedRun.SessionId ==
+                fourthRun.SessionId)
+        {
+            Console.Error.WriteLine(
+                "Self-test Luna Low affinity did not reuse and split sessions as expected.");
+            return false;
+        }
+
+        var sessions =
+            await store.ListAgentSessionsAsync(
+                missionId);
+        var capped =
+            sessions.Single(
+                session =>
+                    session.Id ==
+                    firstRun.SessionId);
+
+        if (capped.Status !=
+                AgentSessionStatus.Closed ||
+            capped.MicrotaskCount != 3 ||
+            capped.TerminationReason !=
+                "worker_microtask_cap" ||
+            capped.LeaseOwnerTaskId is not null)
+        {
+            Console.Error.WriteLine(
+                "Self-test Luna Low session cap did not close the reused session safely.");
+            return false;
+        }
+
+        var turns =
+            await store.ListAgentTurnsAsync(
+                missionId);
+        if (turns
+                .Where(turn =>
+                    turn.SessionId ==
+                        firstRun.SessionId)
+                .Any(turn =>
+                    turn.ContextReuseRecommended !=
+                        true ||
+                    string.IsNullOrWhiteSpace(
+                        turn.ContextReuseReason)))
+        {
+            Console.Error.WriteLine(
+                "Self-test did not persist Luna Low context reuse hints.");
+            return false;
+        }
+
+        var adjacentScore =
+            CodexWorkerSessionService.GetAffinityScore(
+                first,
+                second,
+                [first, second, third]);
+        var conflictScore =
+            CodexWorkerSessionService.GetAffinityScore(
+                first,
+                third,
+                [first, second, third]);
+
+        if (adjacentScore < 3 ||
+            conflictScore != 0)
+        {
+            Console.Error.WriteLine(
+                "Self-test Luna Low affinity scoring did not reject intervening writes.");
+            return false;
+        }
+
+        var staleNow =
+            DateTimeOffset.UtcNow;
+        var stale = new AgentSession(
+            $"stale-{Guid.NewGuid():N}",
+            missionId,
+            AgentSessionRole.Worker,
+            CodexPlanningService.WorkerModel,
+            CodexPlanningService.WorkerReasoning,
+            $"stale-thread-{Guid.NewGuid():N}",
+            AgentSessionStatus.Active,
+            first.Id,
+            1,
+            1,
+            null,
+            staleNow,
+            staleNow,
+            staleNow);
+        await store.UpsertAgentSessionAsync(
+            stale);
+
+        var disabledMission =
+            mission with
+            {
+                Policy =
+                    policy with
+                    {
+                        SessionReuse =
+                            SessionReuseMode.Disabled
+                    }
+            };
+        var disabledRun =
+            await service.RunWorkAsync(
+                disabledMission,
+                unrelated,
+                CodexPlanningService.WorkerModel,
+                CodexPlanningService.WorkerReasoning,
+                "{}",
+                "control");
+        await service.CompleteWorkAsync(
+            disabledMission,
+            disabledRun,
+            true,
+            true,
+            "Control mode hint.");
+
+        if (transport.Requests.Last().SessionMode !=
+            CodexSessionMode.FreshEphemeral)
+        {
+            Console.Error.WriteLine(
+                "Self-test SessionReuseMode.Disabled did not preserve FreshEphemeral control behavior.");
+            return false;
+        }
+
+        var affinityAgain =
+            await service.RunWorkAsync(
+                mission,
+                unrelated,
+                CodexPlanningService.WorkerModel,
+                CodexPlanningService.WorkerReasoning,
+                "{}",
+                "stale-lease-probe");
+        await service.CompleteWorkAsync(
+            mission,
+            affinityAgain,
+            true,
+            false,
+            "Close after stale lease probe.");
+
+        sessions =
+            await store.ListAgentSessionsAsync(
+                missionId);
+        var invalidatedStale =
+            sessions.Single(
+                session =>
+                    session.Id ==
+                    stale.Id);
+
+        if (invalidatedStale.Status !=
+                AgentSessionStatus.Invalidated ||
+            invalidatedStale.TerminationReason !=
+                "stale_worker_lease")
+        {
+            Console.Error.WriteLine(
+                "Self-test did not invalidate a stale Luna Low session lease after restart.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static MissionTask CreateAffinityTask(
+        string missionId,
+        int sequence,
+        string id,
+        IReadOnlyList<string> readFiles,
+        IReadOnlyList<string> writeFiles,
+        IReadOnlyList<string> dependsOn)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var definition =
+            new PlannedTask(
+                id,
+                id,
+                PlannedExecutorKinds.LunaLow,
+                $"Execute {id}.",
+                readFiles,
+                writeFiles,
+                [],
+                dependsOn,
+                new DeterministicOperation(
+                    DeterministicOperationKinds.None,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    [],
+                    string.Empty,
+                    30));
+
+        return new MissionTask(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            sequence,
+            MissionTaskKind.AgentWork,
+            id,
+            definition,
+            DomainTaskStatus.Completed,
+            null,
+            null,
+            null,
+            now,
+            now);
     }
 
     private static async Task<bool>
@@ -2538,6 +2948,126 @@ internal static class SelfTest
 
             throw new InvalidOperationException(
                 "Persisted recovery should not invoke the Supervisor again.");
+        }
+    }
+
+    private sealed class FakeWorkerAffinityTransport(
+        IMissionStore store) : ICodexSessionTransport
+    {
+        public List<CodexStructuredRunRequest> Requests { get; } = [];
+
+        public async Task<CodexStructuredRunResult>
+            RunStructuredAsync(
+                CodexStructuredRunRequest request,
+                CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            var now = DateTimeOffset.UtcNow;
+            AgentSession session;
+            int turnNumber;
+
+            if (request.SessionMode ==
+                CodexSessionMode.Resume)
+            {
+                var sessions =
+                    await store.ListAgentSessionsAsync(
+                        request.MissionId,
+                        cancellationToken);
+                session =
+                    sessions.Single(
+                        candidate =>
+                            candidate.Id ==
+                            request.SessionId);
+                turnNumber =
+                    session.TurnCount + 1;
+                session =
+                    session with
+                    {
+                        TurnCount = turnNumber,
+                        LeaseOwnerTaskId =
+                            request.LeaseOwnerTaskId,
+                        LastUsedAtUtc = now,
+                        UpdatedAtUtc = now
+                    };
+            }
+            else
+            {
+                turnNumber = 1;
+                var ephemeral =
+                    request.SessionMode ==
+                    CodexSessionMode.FreshEphemeral;
+                session = new AgentSession(
+                    $"fake-worker-{Guid.NewGuid():N}",
+                    request.MissionId,
+                    AgentSessionRole.Worker,
+                    request.Model,
+                    request.ReasoningEffort,
+                    ephemeral
+                        ? null
+                        : $"fake-worker-thread-{Guid.NewGuid():N}",
+                    ephemeral
+                        ? AgentSessionStatus.Closed
+                        : AgentSessionStatus.Active,
+                    request.LeaseOwnerTaskId,
+                    turnNumber,
+                    0,
+                    ephemeral
+                        ? "ephemeral"
+                        : null,
+                    now,
+                    now,
+                    now);
+            }
+
+            await store.UpsertAgentSessionAsync(
+                session,
+                cancellationToken);
+
+            var turnId =
+                $"fake-worker-turn-{Guid.NewGuid():N}";
+            var turn = new AgentTurn(
+                turnId,
+                request.MissionId,
+                request.TaskId,
+                session.Id,
+                AgentTurnPurpose.Work,
+                request.Model,
+                request.ReasoningEffort,
+                turnNumber,
+                now,
+                now.AddMilliseconds(5),
+                5,
+                100,
+                80,
+                0,
+                10,
+                2,
+                110);
+            await store.UpsertAgentTurnAsync(
+                turn,
+                cancellationToken);
+
+            return new CodexStructuredRunResult(
+                new ProcessRunResult(
+                    "codex",
+                    [],
+                    0,
+                    false,
+                    5,
+                    string.Empty,
+                    string.Empty),
+                "{}",
+                "{}",
+                new TokenUsage(
+                    100,
+                    80,
+                    10,
+                    2,
+                    110),
+                session.Id,
+                session.ProviderThreadId,
+                turnNumber,
+                turnId);
         }
     }
 
