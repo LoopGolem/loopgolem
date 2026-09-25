@@ -9,6 +9,9 @@ namespace LoopGolem.Worker;
 
 internal static class SelfTest
 {
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
+
     public static async Task<int> RunAsync()
     {
         var root = Path.Combine(
@@ -37,7 +40,8 @@ internal static class SelfTest
             var processRunner = new ProcessRunner();
             if (!await InitializeGitAsync(processRunner, workspace))
             {
-                Console.Error.WriteLine("Self-test could not initialize Git.");
+                Console.Error.WriteLine(
+                    "Self-test could not initialize Git.");
                 return 1;
             }
 
@@ -45,6 +49,17 @@ internal static class SelfTest
                     processRunner,
                     workspace))
             {
+                return 1;
+            }
+
+            var baseCommit = await GetHeadAsync(
+                processRunner,
+                workspace);
+
+            if (baseCommit is null)
+            {
+                Console.Error.WriteLine(
+                    "Self-test could not resolve the baseline commit.");
                 return 1;
             }
 
@@ -99,15 +114,20 @@ internal static class SelfTest
             [
                 new WorkspaceInspectionExecutor(),
                 new ProjectDiscoveryExecutor(),
-                new FakePlannerExecutor(fakePlan),
+                new FakePlannerExecutor(
+                    baseCommit,
+                    fakePlan),
                 new DeterministicTaskExecutor(processRunner),
+                new FakeValidatorExecutor(),
                 new GitChangesExecutor(processRunner),
                 new DotNetBuildExecutor(processRunner)
             ];
 
-            var orchestrator = new MissionOrchestrator(store, executors);
+            var orchestrator =
+                new MissionOrchestrator(store, executors);
+
             var created = await orchestrator.CreateMissionAsync(
-                "Create generated/message.txt.",
+                "Create generated/message.txt and pass final validation.",
                 workspace,
                 MissionExecutionMode.Codex);
 
@@ -115,45 +135,80 @@ internal static class SelfTest
                 created.Tasks[0].Status != DomainTaskStatus.Ready ||
                 created.Tasks[2].Kind != MissionTaskKind.PlanMission)
             {
-                Console.Error.WriteLine("Self-test failed initial planning.");
+                Console.Error.WriteLine(
+                    "Self-test failed initial planning.");
                 return 1;
             }
 
-            var completed = await orchestrator.RunMissionAsync(created.Mission.Id);
+            var completed = await orchestrator.RunMissionAsync(
+                created.Mission.Id);
 
             if (completed is null ||
                 completed.Mission.Status != MissionStatus.Completed ||
-                completed.Tasks.Count != 7 ||
-                completed.Tasks.Any(task => task.Status != DomainTaskStatus.Completed))
+                completed.Tasks.Count != 12 ||
+                completed.Tasks.Any(
+                    task =>
+                        task.Status != DomainTaskStatus.Completed))
             {
-                Console.Error.WriteLine("Self-test failed dynamic execution.");
+                Console.Error.WriteLine(
+                    "Self-test failed planner/validator mission execution.");
                 return 1;
             }
 
-            var messagePath = Path.Combine(workspace, "generated", "message.txt");
-            if (!File.Exists(messagePath) ||
-                await File.ReadAllTextAsync(messagePath) != "hello from LoopGolem")
+            if (completed.Tasks.Count(
+                    task =>
+                        task.Kind ==
+                        MissionTaskKind.ValidateMission) != 2)
             {
-                Console.Error.WriteLine("Self-test deterministic output is invalid.");
+                Console.Error.WriteLine(
+                    "Self-test did not execute the validator correction loop.");
+                return 1;
+            }
+
+            var messagePath = Path.Combine(
+                workspace,
+                "generated",
+                "message.txt");
+            var correctionPath = Path.Combine(
+                workspace,
+                "generated",
+                "review.txt");
+
+            if (!File.Exists(messagePath) ||
+                await File.ReadAllTextAsync(messagePath) !=
+                    "hello from LoopGolem" ||
+                !File.Exists(correctionPath) ||
+                await File.ReadAllTextAsync(correctionPath) !=
+                    "validator correction applied")
+            {
+                Console.Error.WriteLine(
+                    "Self-test deterministic/validator output is invalid.");
                 return 1;
             }
 
             var reopened = new SqliteMissionStore(database);
             await reopened.InitializeAsync();
-            var persisted = await reopened.GetAsync(created.Mission.Id);
+
+            var persisted = await reopened.GetAsync(
+                created.Mission.Id);
 
             if (persisted is null ||
-                persisted.Tasks.Count != 7 ||
-                persisted.Tasks.Count(task =>
-                    task.Kind == MissionTaskKind.DeterministicWork) != 2 ||
-                persisted.Tasks.Any(task => task.Definition is null))
+                persisted.Tasks.Count != 12 ||
+                persisted.Tasks.Count(
+                    task =>
+                        task.Kind ==
+                        MissionTaskKind.ValidateMission) != 2 ||
+                persisted.Tasks.Any(
+                    task => task.Definition is null))
             {
-                Console.Error.WriteLine("Self-test did not persist plan metadata.");
+                Console.Error.WriteLine(
+                    "Self-test did not persist expanded validator plan metadata.");
                 return 1;
             }
 
             Console.WriteLine(completed.Mission.Result);
-            Console.WriteLine("LoopGolem worker self-test passed.");
+            Console.WriteLine(
+                "LoopGolem worker self-test passed.");
             return 0;
         }
         finally
@@ -175,8 +230,18 @@ internal static class SelfTest
         var commands = new[]
         {
             new[] { "init" },
-            new[] { "config", "user.email", "loopgolem@example.invalid" },
-            new[] { "config", "user.name", "LoopGolem Self Test" },
+            new[]
+            {
+                "config",
+                "user.email",
+                "loopgolem@example.invalid"
+            },
+            new[]
+            {
+                "config",
+                "user.name",
+                "LoopGolem Self Test"
+            },
             new[] { "add", "." },
             new[] { "commit", "-m", "baseline" }
         };
@@ -198,22 +263,55 @@ internal static class SelfTest
         return true;
     }
 
-    private static async Task<bool> VerifyRunCommandWorkingDirectoriesAsync(
+    private static async Task<string?> GetHeadAsync(
         ProcessRunner processRunner,
         string workspace)
     {
-        var nestedDirectory = Path.Combine(workspace, "generated", "nested");
+        var run = await processRunner.RunAsync(
+            "git",
+            ["rev-parse", "HEAD"],
+            workspace,
+            TimeSpan.FromSeconds(30));
+
+        return run.ExitCode == 0 && !run.TimedOut
+            ? run.StandardOutput.Trim()
+            : null;
+    }
+
+    private static async Task<bool>
+        VerifyRunCommandWorkingDirectoriesAsync(
+            ProcessRunner processRunner,
+            string workspace)
+    {
+        var nestedDirectory = Path.Combine(
+            workspace,
+            "generated",
+            "nested");
+
         Directory.CreateDirectory(nestedDirectory);
 
-        var executor = new DeterministicTaskExecutor(processRunner);
-        var executable = OperatingSystem.IsWindows() ? "cmd.exe" : "pwd";
-        IReadOnlyList<string> arguments = OperatingSystem.IsWindows()
-            ? ["/c", "cd"]
-            : [];
-        foreach (var (workingDirectory, expectedDirectory) in new[]
+        var executor =
+            new DeterministicTaskExecutor(processRunner);
+
+        var executable =
+            OperatingSystem.IsWindows()
+                ? "cmd.exe"
+                : "pwd";
+
+        IReadOnlyList<string> arguments =
+            OperatingSystem.IsWindows()
+                ? ["/c", "cd"]
+                : [];
+
+        foreach (var (
+                     workingDirectory,
+                     expectedDirectory)
+                 in new[]
                  {
                      (".", workspace),
-                     ("generated/nested", nestedDirectory)
+                     (
+                         "generated/nested",
+                         nestedDirectory)
                  })
         {
             var result = await ExecuteRunCommandAsync(
@@ -230,11 +328,14 @@ internal static class SelfTest
                 return false;
             }
 
-            var processResult = JsonSerializer.Deserialize<ProcessRunResult>(
-                result.Details ?? string.Empty);
+            var processResult =
+                JsonSerializer.Deserialize<ProcessRunResult>(
+                    result.Details ?? string.Empty);
+
             if (processResult is null ||
                 !string.Equals(
-                    Path.GetFullPath(processResult.StandardOutput.Trim()),
+                    Path.GetFullPath(
+                        processResult.StandardOutput.Trim()),
                     Path.GetFullPath(expectedDirectory),
                     OperatingSystem.IsWindows()
                         ? StringComparison.OrdinalIgnoreCase
@@ -252,21 +353,24 @@ internal static class SelfTest
             "..",
             executable,
             arguments);
+
         if (rejected.Success)
         {
-            Console.Error.WriteLine("Self-test run_command accepted a parent directory.");
+            Console.Error.WriteLine(
+                "Self-test run_command accepted a parent directory.");
             return false;
         }
 
         return true;
     }
 
-    private static Task<TaskExecutionResult> ExecuteRunCommandAsync(
-        DeterministicTaskExecutor executor,
-        string workspace,
-        string workingDirectory,
-        string executable,
-        IReadOnlyList<string> arguments)
+    private static Task<TaskExecutionResult>
+        ExecuteRunCommandAsync(
+            DeterministicTaskExecutor executor,
+            string workspace,
+            string workingDirectory,
+            string executable,
+            IReadOnlyList<string> arguments)
     {
         var operation = new DeterministicOperation(
             DeterministicOperationKinds.RunCommand,
@@ -278,6 +382,7 @@ internal static class SelfTest
             arguments,
             workingDirectory,
             30);
+
         var definition = new PlannedTask(
             "self-test-run-command",
             "Verify run_command working directory",
@@ -288,6 +393,7 @@ internal static class SelfTest
             [],
             [],
             operation);
+
         var mission = new Mission(
             "self-test",
             "Verify run_command working directory handling",
@@ -298,6 +404,7 @@ internal static class SelfTest
             null,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow);
+
         var task = new MissionTask(
             "self-test-run-command",
             mission.Id,
@@ -312,13 +419,17 @@ internal static class SelfTest
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow);
 
-        return executor.ExecuteAsync(mission, task);
+        return executor.ExecuteAsync(
+            mission,
+            task);
     }
 
     private sealed class FakePlannerExecutor(
+        string baseCommit,
         MissionPlan plan) : IMissionTaskExecutor
     {
-        public MissionTaskKind Kind => MissionTaskKind.PlanMission;
+        public MissionTaskKind Kind =>
+            MissionTaskKind.PlanMission;
 
         public Task<TaskExecutionResult> ExecuteAsync(
             Mission mission,
@@ -327,6 +438,77 @@ internal static class SelfTest
             Task.FromResult(
                 TaskExecutionResult.Succeeded(
                     plan.Summary,
-                    JsonSerializer.Serialize(plan)));
+                    JsonSerializer.Serialize(
+                        new PlannerResult(
+                            baseCommit,
+                            plan),
+                        JsonOptions)));
+    }
+
+    private sealed class FakeValidatorExecutor :
+        IMissionTaskExecutor
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.ValidateMission;
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            var context =
+                JsonSerializer.Deserialize<ValidatorContext>(
+                    task.Definition?.Prompt ??
+                        string.Empty,
+                    JsonOptions);
+
+            if (context is null)
+            {
+                return Task.FromResult(
+                    TaskExecutionResult.Failed(
+                        "Fake validator context missing.",
+                        "Self-test validator context could not be parsed."));
+            }
+
+            ValidationResult result =
+                context.Cycle == 1
+                    ? new ValidationResult(
+                        "not_ok",
+                        "Apply one deterministic correction.",
+                        [
+                            new PlannedTask(
+                                "fix1_write-review",
+                                "Write validator correction marker",
+                                PlannedExecutorKinds.Deterministic,
+                                string.Empty,
+                                [],
+                                ["generated/review.txt"],
+                                [],
+                                [],
+                                new DeterministicOperation(
+                                    DeterministicOperationKinds.WriteFile,
+                                    "generated/review.txt",
+                                    "validator correction applied",
+                                    string.Empty,
+                                    string.Empty,
+                                    string.Empty,
+                                    [],
+                                    string.Empty,
+                                    30))
+                        ])
+                    : new ValidationResult(
+                        "ok",
+                        "Final snapshot satisfies the mission.",
+                        []);
+
+            return Task.FromResult(
+                TaskExecutionResult.Succeeded(
+                    result.Summary,
+                    JsonSerializer.Serialize(
+                        new ValidatorExecutionResult(
+                            $"fake-snapshot-{context.Cycle}",
+                            result),
+                        JsonOptions)));
+        }
     }
 }
