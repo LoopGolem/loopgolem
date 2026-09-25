@@ -1161,7 +1161,8 @@ internal static class SelfTest
                         new PlannerResult(
                             baseCommit,
                             plan),
-                        JsonOptions)));
+                        JsonOptions),
+                    new TokenUsage(100, 40, 20, 5, 120)));
     }
 
     private sealed class FakeValidatorExecutor :
@@ -1227,7 +1228,8 @@ internal static class SelfTest
                         new ValidatorExecutionResult(
                             $"fake-snapshot-{context.Cycle}",
                             result),
-                        JsonOptions)));
+                        JsonOptions),
+                    new TokenUsage(50, 20, 10, 2, 60)));
         }
     }
 }
