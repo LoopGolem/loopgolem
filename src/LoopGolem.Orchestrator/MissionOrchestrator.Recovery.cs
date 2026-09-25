@@ -872,19 +872,11 @@ public sealed partial class MissionOrchestrator
                     },
                     CancellationToken.None);
 
-                var readyForExactRecheck =
-                    recoveryTask with
-                    {
-                        Status =
-                            DomainTaskStatus.Ready,
-                        Error = null,
-                        UpdatedAtUtc = now
-                    };
-
                 snapshot =
-                    ReplaceTask(
+                    PrepareRetryAfterRepair(
                         snapshot,
-                        readyForExactRecheck);
+                        recoveryTask,
+                        now);
 
                 await _store.UpdateAsync(
                     snapshot,
@@ -941,6 +933,160 @@ public sealed partial class MissionOrchestrator
             true,
             false);
     }
+
+    private static MissionSnapshot PrepareRetryAfterRepair(
+        MissionSnapshot snapshot,
+        MissionTask recoveryTask,
+        DateTimeOffset now)
+    {
+        var prerequisiteTaskIds =
+            FindRepairReplayPrerequisites(
+                snapshot.Tasks,
+                recoveryTask);
+
+        if (prerequisiteTaskIds.Count == 0)
+        {
+            return ReplaceTask(
+                snapshot,
+                recoveryTask with
+                {
+                    Status =
+                        DomainTaskStatus.Ready,
+                    Error = null,
+                    UpdatedAtUtc = now
+                });
+        }
+
+        var tasks =
+            snapshot.Tasks
+                .Select(task =>
+                {
+                    if (task.Id ==
+                        recoveryTask.Id)
+                    {
+                        return task with
+                        {
+                            Status =
+                                DomainTaskStatus.Planned,
+                            Error = null,
+                            UpdatedAtUtc = now
+                        };
+                    }
+
+                    if (!prerequisiteTaskIds.Contains(
+                            task.Id) ||
+                        task.Status !=
+                            DomainTaskStatus.Completed)
+                    {
+                        return task;
+                    }
+
+                    return task with
+                    {
+                        Status =
+                            DomainTaskStatus.Planned,
+                        Result = null,
+                        ResultDetails = null,
+                        Error = null,
+                        UpdatedAtUtc = now
+                    };
+                })
+                .OrderBy(task => task.Sequence)
+                .ToArray();
+
+        return UpdateReadyStates(
+            snapshot with
+            {
+                Tasks = tasks
+            },
+            now);
+    }
+
+    private static HashSet<string>
+        FindRepairReplayPrerequisites(
+            IReadOnlyList<MissionTask> tasks,
+            MissionTask failedTask)
+    {
+        var result =
+            new HashSet<string>(
+                StringComparer.Ordinal);
+
+        if (failedTask.Definition is null ||
+            failedTask.Definition.DependsOn.Count == 0)
+        {
+            return result;
+        }
+
+        var byDefinitionId =
+            tasks
+                .Where(task =>
+                    !string.IsNullOrWhiteSpace(
+                        task.Definition?.Id))
+                .ToDictionary(
+                    task =>
+                        task.Definition!.Id,
+                    StringComparer.Ordinal);
+
+        var pending =
+            new Stack<string>(
+                failedTask.Definition.DependsOn);
+        var visited =
+            new HashSet<string>(
+                StringComparer.Ordinal);
+
+        while (pending.Count > 0)
+        {
+            var dependencyId =
+                pending.Pop();
+
+            if (!visited.Add(
+                    dependencyId) ||
+                !byDefinitionId.TryGetValue(
+                    dependencyId,
+                    out var dependency))
+            {
+                continue;
+            }
+
+            if (dependency.Status ==
+                    DomainTaskStatus.Completed &&
+                IsRepairReplayPrerequisite(
+                    dependency))
+            {
+                result.Add(
+                    dependency.Id);
+            }
+
+            if (dependency.Definition is null)
+            {
+                continue;
+            }
+
+            foreach (var parentId
+                     in dependency.Definition.DependsOn)
+            {
+                pending.Push(
+                    parentId);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsRepairReplayPrerequisite(
+        MissionTask task) =>
+        task.Kind ==
+            MissionTaskKind.BuildDotNet ||
+        task.Kind ==
+            MissionTaskKind.DeterministicWork &&
+        task.Definition is
+        {
+            Executor:
+                PlannedExecutorKinds.Deterministic,
+            RerunAfterRepair: true,
+            Deterministic.Kind:
+                DeterministicOperationKinds.RunCommand
+        };
 
     private static string? ValidateRecoveryRepairs(
         MissionSnapshot snapshot,

@@ -848,9 +848,11 @@ public sealed class CodexPlanningService(
         - Make readFiles and writeFiles precise repository-relative paths.
         - Luna Low may write ONLY writeFiles; include every file it must modify.
         - Use dependsOn whenever a task requires files or state produced by another task.
+        - Set rerunAfterRepair=true only for a deterministic prerequisite that is intentionally safe and idempotent to repeat after a source repair and refreshes derived artifacts consumed by downstream dependent checks (for example a build). Set it false otherwise.
+        - Never use rerunAfterRepair=true to authorize replay of a command with externally visible or non-idempotent side effects.
         - Never request a model above GPT-6 Luna. Human attention is preferred.
         - Keep each Luna Low prompt self-contained and small.
-        - For Luna Low set deterministic.kind to "none" and leave unused deterministic strings empty.
+        - For Luna Low set rerunAfterRepair=false, set deterministic.kind to "none", and leave unused deterministic strings empty.
         - For deterministic tasks the deterministic object must fully specify the one operation.
         - finalChecks lists repository-level checks that the final GPT-6 Luna High validator must review.
         - {SelfHostingRule}
@@ -924,7 +926,7 @@ public sealed class CodexPlanningService(
         - Keep each repair task narrow and independently understandable.
         - Use precise repository-relative readFiles and writeFiles.
         - Include every file a repair may modify in writeFiles.
-        - For every repair set deterministic.kind to "none" and leave unused deterministic strings empty.
+        - For every repair set rerunAfterRepair=false, set deterministic.kind to "none", and leave unused deterministic strings empty.
         - Luna Low runs in the AGENT ENVIRONMENT. Never require a probed tool marked UNAVAILABLE there.
         - Do not put host-only commands into Luna Low acceptanceChecks.
         - The exact failed deterministic check will be rerun automatically by LoopGolem after all repairs complete.
@@ -991,7 +993,8 @@ public sealed class CodexPlanningService(
         - Use unique correction ids prefixed with "fix{context.Cycle}_".
         - {SelfHostingRule}
         - Never request or assume a model above GPT-6 Luna. If the work is too complex to validate safely, use not_ok with bounded corrective tasks; LoopGolem will stop for human attention after its cycle limit.
-        - For luna_low set deterministic.kind to "none".
+        - For luna_low set rerunAfterRepair=false and deterministic.kind to "none".
+        - For deterministic correction tasks, set rerunAfterRepair=true only when the task is an intentionally safe, idempotent artifact-refresh prerequisite for a downstream dependent check; otherwise false.
         - Do not commit, push, create branches, or modify files.
         """;
     }
@@ -1128,6 +1131,7 @@ public sealed class CodexPlanningService(
                     "type": "array",
                     "items": { "type": "string" }
                   },
+                  "rerunAfterRepair": { "type": "boolean" },
                   "deterministic": {
                     "type": "object",
                     "properties": {
@@ -1161,7 +1165,8 @@ public sealed class CodexPlanningService(
                 },
                 "required": [
                   "id", "title", "executor", "prompt", "readFiles",
-                  "writeFiles", "acceptanceChecks", "dependsOn", "deterministic"
+                  "writeFiles", "acceptanceChecks", "dependsOn",
+                  "rerunAfterRepair", "deterministic"
                 ],
                 "additionalProperties": false
               }
@@ -1241,6 +1246,7 @@ public sealed class CodexPlanningService(
                     "type": "array",
                     "items": { "type": "string" }
                   },
+                  "rerunAfterRepair": { "type": "boolean" },
                   "deterministic": {
                     "type": "object",
                     "properties": {
@@ -1274,7 +1280,8 @@ public sealed class CodexPlanningService(
                 },
                 "required": [
                   "id", "title", "executor", "prompt", "readFiles",
-                  "writeFiles", "acceptanceChecks", "dependsOn", "deterministic"
+                  "writeFiles", "acceptanceChecks", "dependsOn",
+                  "rerunAfterRepair", "deterministic"
                 ],
                 "additionalProperties": false
               }
@@ -1320,6 +1327,7 @@ public sealed class CodexPlanningService(
                     "type": "array",
                     "items": { "type": "string" }
                   },
+                  "rerunAfterRepair": { "type": "boolean" },
                   "deterministic": {
                     "type": "object",
                     "properties": {
@@ -1353,7 +1361,8 @@ public sealed class CodexPlanningService(
                 },
                 "required": [
                   "id", "title", "executor", "prompt", "readFiles",
-                  "writeFiles", "acceptanceChecks", "dependsOn", "deterministic"
+                  "writeFiles", "acceptanceChecks", "dependsOn",
+                  "rerunAfterRepair", "deterministic"
                 ],
                 "additionalProperties": false
               }

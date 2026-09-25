@@ -176,6 +176,12 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyRecoveryReplaysInvalidatedPrerequisitesAsync(
+                    root))
+            {
+                return 1;
+            }
+
             if (!await VerifyRecoveryExhaustionAsync(
                     root))
             {
@@ -1997,6 +2003,270 @@ internal static class SelfTest
     }
 
     private static async Task<bool>
+        VerifyRecoveryReplaysInvalidatedPrerequisitesAsync(
+            string root)
+    {
+        var workspace = Path.Combine(
+            root,
+            "recovery-prerequisite-workspace");
+        var database = Path.Combine(
+            root,
+            "state",
+            "recovery-prerequisite.db");
+        Directory.CreateDirectory(workspace);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(
+                workspace,
+                "source.txt"),
+            "broken");
+
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var now =
+            DateTimeOffset.UtcNow;
+        var missionId =
+            $"recovery-prerequisite-{Guid.NewGuid():N}";
+        var mission =
+            new Mission(
+                missionId,
+                "Rebuild invalidated artifacts before retrying the exact check.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now)
+            {
+                Policy =
+                    MissionPolicy.Default with
+                    {
+                        MaxRecoveryCycles = 3
+                    }
+            };
+
+        var unsafeDefinition =
+            new PlannedTask(
+                "unsafe-prerequisite",
+                "Do not replay arbitrary prerequisite",
+                PlannedExecutorKinds.Deterministic,
+                string.Empty,
+                [],
+                [],
+                [],
+                [],
+                new DeterministicOperation(
+                    DeterministicOperationKinds.RunCommand,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    "unsafe-tool",
+                    [],
+                    ".",
+                    30));
+
+        var buildDefinition =
+            new PlannedTask(
+                "build-artifact",
+                "Build derived artifact",
+                PlannedExecutorKinds.Deterministic,
+                string.Empty,
+                ["source.txt"],
+                [],
+                [],
+                [],
+                new DeterministicOperation(
+                    DeterministicOperationKinds.RunCommand,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    "build-tool",
+                    [],
+                    ".",
+                    30))
+            {
+                RerunAfterRepair = true
+            };
+
+        var checkDefinition =
+            new PlannedTask(
+                "check-artifact",
+                "Check built artifact",
+                PlannedExecutorKinds.Deterministic,
+                string.Empty,
+                ["artifact.txt"],
+                [],
+                [],
+                [
+                    "unsafe-prerequisite",
+                    "build-artifact"
+                ],
+                new DeterministicOperation(
+                    DeterministicOperationKinds.RunCommand,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    "check-tool",
+                    [],
+                    ".",
+                    30));
+
+        var unsafeTask =
+            new MissionTask(
+                Guid.NewGuid().ToString("N"),
+                missionId,
+                1,
+                MissionTaskKind.DeterministicWork,
+                unsafeDefinition.Title,
+                unsafeDefinition,
+                DomainTaskStatus.Completed,
+                "Previously completed unsafe prerequisite.",
+                null,
+                null,
+                now,
+                now);
+
+        var buildTask =
+            new MissionTask(
+                Guid.NewGuid().ToString("N"),
+                missionId,
+                2,
+                MissionTaskKind.DeterministicWork,
+                buildDefinition.Title,
+                buildDefinition,
+                DomainTaskStatus.Ready,
+                null,
+                null,
+                null,
+                now,
+                now);
+
+        var checkTask =
+            new MissionTask(
+                Guid.NewGuid().ToString("N"),
+                missionId,
+                3,
+                MissionTaskKind.DeterministicWork,
+                checkDefinition.Title,
+                checkDefinition,
+                DomainTaskStatus.Planned,
+                null,
+                null,
+                null,
+                now,
+                now);
+
+        var snapshot =
+            new MissionSnapshot(
+                mission,
+                [
+                    unsafeTask,
+                    buildTask,
+                    checkTask
+                ]);
+        await store.CreateAsync(
+            snapshot);
+
+        var pipeline =
+            new RecoveryArtifactPipelineExecutor();
+        var repair =
+            new RecoverySourceRepairExecutor();
+        var planner =
+            new ArtifactRecoveryPlanner();
+
+        var orchestrator =
+            new MissionOrchestrator(
+                store,
+                [pipeline, repair],
+                planner);
+
+        var completed =
+            await orchestrator.RunMissionAsync(
+                missionId);
+
+        var cycles =
+            await store.ListRecoveryCyclesAsync(
+                missionId);
+        var attempts =
+            await store.ListTaskAttemptsAsync(
+                missionId);
+
+        if (completed?.Mission.Status !=
+                MissionStatus.Completed ||
+            pipeline.BuildCalls != 2 ||
+            pipeline.CheckCalls != 2 ||
+            pipeline.UnsafeCalls != 0 ||
+            planner.Calls != 1 ||
+            cycles.Count != 1 ||
+            cycles[0].Status !=
+                RecoveryCycleStatus.Succeeded)
+        {
+            Console.Error.WriteLine(
+                "Self-test recovery did not replay only the repair-safe prerequisite before the exact check.");
+            return false;
+        }
+
+        var buildAttempts =
+            attempts
+                .Where(attempt =>
+                    attempt.TaskId ==
+                        buildTask.Id)
+                .OrderBy(attempt =>
+                    attempt.AttemptNumber)
+                .ToArray();
+        var checkAttempts =
+            attempts
+                .Where(attempt =>
+                    attempt.TaskId ==
+                        checkTask.Id)
+                .OrderBy(attempt =>
+                    attempt.AttemptNumber)
+                .ToArray();
+
+        if (buildAttempts.Length != 2 ||
+            buildAttempts.Any(attempt =>
+                attempt.Outcome !=
+                    MissionTaskAttemptOutcome.Succeeded) ||
+            checkAttempts.Length != 2 ||
+            checkAttempts[0].Outcome !=
+                MissionTaskAttemptOutcome.Failed ||
+            checkAttempts[1].Outcome !=
+                MissionTaskAttemptOutcome.Succeeded ||
+            pipeline.CheckDefinitions.Count != 2 ||
+            pipeline.CheckDefinitions[0] !=
+                pipeline.CheckDefinitions[1])
+        {
+            Console.Error.WriteLine(
+                "Self-test recovery prerequisite attempts or exact-check identity are invalid.");
+            return false;
+        }
+
+        var artifactPath =
+            Path.Combine(
+                workspace,
+                "artifact.txt");
+
+        if (!File.Exists(
+                artifactPath) ||
+            await File.ReadAllTextAsync(
+                artifactPath) !=
+                "fixed")
+        {
+            Console.Error.WriteLine(
+                "Self-test recovery retried the check without refreshing the derived artifact.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
         VerifyRecoveryExhaustionAsync(
             string root)
     {
@@ -3505,6 +3775,192 @@ internal static class SelfTest
         return executor.ExecuteAsync(
             mission,
             task);
+    }
+
+    private sealed class RecoveryArtifactPipelineExecutor :
+        IMissionTaskExecutor
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.DeterministicWork;
+
+        public int BuildCalls { get; private set; }
+
+        public int CheckCalls { get; private set; }
+
+        public int UnsafeCalls { get; private set; }
+
+        public List<string> CheckDefinitions { get; } =
+            [];
+
+        public async Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            var definitionId =
+                task.Definition?.Id;
+
+            if (definitionId ==
+                "build-artifact")
+            {
+                BuildCalls++;
+
+                var source =
+                    await File.ReadAllTextAsync(
+                        Path.Combine(
+                            mission.WorkspacePath,
+                            "source.txt"),
+                        cancellationToken);
+                await File.WriteAllTextAsync(
+                    Path.Combine(
+                        mission.WorkspacePath,
+                        "artifact.txt"),
+                    source,
+                    cancellationToken);
+
+                return TaskExecutionResult.Succeeded(
+                    "Derived artifact built.");
+            }
+
+            if (definitionId ==
+                "check-artifact")
+            {
+                CheckCalls++;
+                CheckDefinitions.Add(
+                    JsonSerializer.Serialize(
+                        task.Definition,
+                        JsonOptions));
+
+                var artifactPath =
+                    Path.Combine(
+                        mission.WorkspacePath,
+                        "artifact.txt");
+                var artifact =
+                    File.Exists(
+                        artifactPath)
+                        ? await File.ReadAllTextAsync(
+                            artifactPath,
+                            cancellationToken)
+                        : string.Empty;
+
+                return artifact ==
+                    "fixed"
+                    ? TaskExecutionResult.Succeeded(
+                        "Exact artifact check passed.")
+                    : TaskExecutionResult.Failed(
+                        "Exact artifact check failed.",
+                        "The built artifact is stale.",
+                        JsonSerializer.Serialize(
+                            new ProcessRunResult(
+                                "check-tool",
+                                [],
+                                1,
+                                false,
+                                5,
+                                string.Empty,
+                                "The built artifact is stale.")),
+                        failureKind:
+                            TaskFailureKind.KnownDeterministicFailure);
+            }
+
+            if (definitionId ==
+                "unsafe-prerequisite")
+            {
+                UnsafeCalls++;
+
+                return TaskExecutionResult.Succeeded(
+                    "Unsafe prerequisite ran unexpectedly.");
+            }
+
+            return TaskExecutionResult.Failed(
+                "Unknown recovery prerequisite self-test task.",
+                definitionId ??
+                    "(missing definition id)");
+        }
+    }
+
+    private sealed class RecoverySourceRepairExecutor :
+        IMissionTaskExecutor,
+        IMissionTaskExecutionContextProvider
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.AgentWork;
+
+        public bool RequiresExecutionContext(
+            MissionTask task) => true;
+
+        public Task<string> CreateExecutionContextAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(
+                "recovery-source-baseline");
+
+        public async Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(
+                    mission.WorkspacePath,
+                    "source.txt"),
+                "fixed",
+                cancellationToken);
+
+            return TaskExecutionResult.Succeeded(
+                "Repaired source consumed by the replayable prerequisite.");
+        }
+    }
+
+    private sealed class ArtifactRecoveryPlanner :
+        IMissionRecoveryPlanner
+    {
+        public int Calls { get; private set; }
+
+        public Task<RecoveryPlanningResult>
+            PlanRecoveryAsync(
+                Mission mission,
+                MissionTask failedTask,
+                MissionTaskAttempt failureAttempt,
+                RecoveryCycle cycle,
+                CancellationToken cancellationToken = default)
+        {
+            Calls++;
+
+            var id =
+                RecoveryTaskNaming.GetRepairPrefix(
+                    failedTask.Id,
+                    cycle.CycleNumber) +
+                "fix-source";
+
+            var repair =
+                new PlannedTask(
+                    id,
+                    "Repair source for artifact check",
+                    PlannedExecutorKinds.LunaLow,
+                    "Repair the source that feeds the deterministic artifact build.",
+                    ["source.txt"],
+                    ["source.txt"],
+                    [],
+                    [],
+                    new DeterministicOperation(
+                        DeterministicOperationKinds.None,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        string.Empty,
+                        60));
+
+            return Task.FromResult(
+                RecoveryPlanningResult.Succeeded(
+                    "Repair the source and refresh invalidated prerequisites.",
+                    [repair],
+                    null));
+        }
     }
 
     private sealed class RecoveryCheckExecutor(
