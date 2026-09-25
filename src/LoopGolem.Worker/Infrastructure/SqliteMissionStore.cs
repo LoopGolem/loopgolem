@@ -30,6 +30,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     goal TEXT NOT NULL,
                     workspace_path TEXT NOT NULL,
                     execution_mode TEXT NOT NULL DEFAULT 'ValidateOnly',
+                    policy_json TEXT NULL,
                     status TEXT NOT NULL,
                     result TEXT NULL,
                     error TEXT NULL,
@@ -58,6 +59,103 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
 
                 CREATE INDEX IF NOT EXISTS ix_mission_tasks_mission_id
                     ON mission_tasks(mission_id);
+
+                CREATE TABLE IF NOT EXISTS mission_task_attempts (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    attempt_number INTEGER NOT NULL,
+                    outcome TEXT NOT NULL,
+                    failure_kind TEXT NOT NULL,
+                    summary TEXT NULL,
+                    evidence_json TEXT NULL,
+                    started_utc TEXT NOT NULL,
+                    completed_utc TEXT NULL,
+                    FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+                    FOREIGN KEY (task_id) REFERENCES mission_tasks(id) ON DELETE CASCADE,
+                    UNIQUE (task_id, attempt_number)
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_mission_task_attempts_mission_id
+                    ON mission_task_attempts(mission_id);
+
+                CREATE TABLE IF NOT EXISTS agent_sessions (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    thread_id TEXT NULL,
+                    model TEXT NOT NULL,
+                    reasoning_effort TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    lease_task_id TEXT NULL,
+                    turn_count INTEGER NOT NULL DEFAULT 0,
+                    microtask_count INTEGER NOT NULL DEFAULT 0,
+                    created_utc TEXT NOT NULL,
+                    last_used_utc TEXT NOT NULL,
+                    closed_utc TEXT NULL,
+                    termination_reason TEXT NULL,
+                    FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+                    FOREIGN KEY (lease_task_id) REFERENCES mission_tasks(id) ON DELETE SET NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_agent_sessions_mission_id
+                    ON agent_sessions(mission_id);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_sessions_thread_id
+                    ON agent_sessions(thread_id)
+                    WHERE thread_id IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS agent_turns (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    task_id TEXT NULL,
+                    purpose TEXT NOT NULL,
+                    turn_number INTEGER NOT NULL,
+                    model TEXT NOT NULL,
+                    reasoning_effort TEXT NOT NULL,
+                    input_tokens INTEGER NULL,
+                    cached_input_tokens INTEGER NULL,
+                    cache_write_input_tokens INTEGER NULL,
+                    output_tokens INTEGER NULL,
+                    reasoning_output_tokens INTEGER NULL,
+                    total_tokens INTEGER NULL,
+                    started_utc TEXT NOT NULL,
+                    completed_utc TEXT NULL,
+                    duration_ms INTEGER NULL,
+                    success INTEGER NULL,
+                    error TEXT NULL,
+                    FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+                    FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE,
+                    FOREIGN KEY (task_id) REFERENCES mission_tasks(id) ON DELETE SET NULL,
+                    UNIQUE (session_id, turn_number)
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_agent_turns_mission_id
+                    ON agent_turns(mission_id);
+
+                CREATE TABLE IF NOT EXISTS recovery_episodes (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    failed_task_id TEXT NOT NULL,
+                    cycle INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    failed_attempt_id TEXT NULL,
+                    recovery_turn_id TEXT NULL,
+                    repair_task_ids_json TEXT NOT NULL,
+                    failure_evidence_json TEXT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+                    FOREIGN KEY (failed_task_id) REFERENCES mission_tasks(id) ON DELETE CASCADE,
+                    FOREIGN KEY (failed_attempt_id) REFERENCES mission_task_attempts(id) ON DELETE SET NULL,
+                    FOREIGN KEY (recovery_turn_id) REFERENCES agent_turns(id) ON DELETE SET NULL,
+                    UNIQUE (failed_task_id, cycle)
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_recovery_episodes_mission_id
+                    ON recovery_episodes(mission_id);
                 """;
 
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -68,6 +166,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             "missions",
             "execution_mode",
             "TEXT NOT NULL DEFAULT 'ValidateOnly'",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "missions",
+            "policy_json",
+            "TEXT NULL",
             cancellationToken);
         await EnsureColumnAsync(
             connection,
@@ -126,9 +230,9 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             missionCommand.Transaction = (SqliteTransaction)transaction;
             missionCommand.CommandText = """
                 INSERT INTO missions (
-                    id, goal, workspace_path, execution_mode, status, result, error, created_utc, updated_utc)
+                    id, goal, workspace_path, execution_mode, policy_json, status, result, error, created_utc, updated_utc)
                 VALUES (
-                    $id, $goal, $workspacePath, $executionMode, $status, $result, $error, $createdUtc, $updatedUtc);
+                    $id, $goal, $workspacePath, $executionMode, $policyJson, $status, $result, $error, $createdUtc, $updatedUtc);
                 """;
 
             AddMissionParameters(missionCommand, snapshot.Mission);
@@ -204,6 +308,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     goal = $goal,
                     workspace_path = $workspacePath,
                     execution_mode = $executionMode,
+                    policy_json = $policyJson,
                     status = $status,
                     result = $result,
                     error = $error,
@@ -226,6 +331,425 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+
+    public async Task SaveTaskAttemptAsync(
+        MissionTaskAttempt attempt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO mission_task_attempts (
+                id, mission_id, task_id, attempt_number, outcome, failure_kind,
+                summary, evidence_json, started_utc, completed_utc)
+            VALUES (
+                $id, $missionId, $taskId, $attemptNumber, $outcome, $failureKind,
+                $summary, $evidenceJson, $startedUtc, $completedUtc)
+            ON CONFLICT(id) DO UPDATE SET
+                mission_id = excluded.mission_id,
+                task_id = excluded.task_id,
+                attempt_number = excluded.attempt_number,
+                outcome = excluded.outcome,
+                failure_kind = excluded.failure_kind,
+                summary = excluded.summary,
+                evidence_json = excluded.evidence_json,
+                started_utc = excluded.started_utc,
+                completed_utc = excluded.completed_utc;
+            """;
+
+        command.Parameters.AddWithValue("$id", attempt.Id);
+        command.Parameters.AddWithValue("$missionId", attempt.MissionId);
+        command.Parameters.AddWithValue("$taskId", attempt.TaskId);
+        command.Parameters.AddWithValue("$attemptNumber", attempt.AttemptNumber);
+        command.Parameters.AddWithValue("$outcome", attempt.Outcome.ToString());
+        command.Parameters.AddWithValue("$failureKind", attempt.FailureKind.ToString());
+        command.Parameters.AddWithValue("$summary", (object?)attempt.Summary ?? DBNull.Value);
+        command.Parameters.AddWithValue("$evidenceJson", (object?)attempt.EvidenceJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$startedUtc", FormatTimestamp(attempt.StartedAtUtc));
+        command.Parameters.AddWithValue(
+            "$completedUtc",
+            attempt.CompletedAtUtc is { } completed
+                ? FormatTimestamp(completed)
+                : DBNull.Value);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MissionTaskAttempt>> ListTaskAttemptsAsync(
+        string missionId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, mission_id, task_id, attempt_number, outcome, failure_kind,
+                   summary, evidence_json, started_utc, completed_utc
+            FROM mission_task_attempts
+            WHERE mission_id = $missionId
+            ORDER BY task_id, attempt_number;
+            """;
+        command.Parameters.AddWithValue("$missionId", missionId);
+
+        var attempts = new List<MissionTaskAttempt>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            attempts.Add(new MissionTaskAttempt(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt32(3),
+                Enum.Parse<TaskAttemptOutcome>(reader.GetString(4)),
+                Enum.Parse<TaskFailureKind>(reader.GetString(5)),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                ParseTimestamp(reader.GetString(8)),
+                reader.IsDBNull(9)
+                    ? null
+                    : ParseTimestamp(reader.GetString(9))));
+        }
+
+        return attempts;
+    }
+
+    public async Task SaveAgentSessionAsync(
+        AgentSession session,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO agent_sessions (
+                id, mission_id, role, provider, thread_id, model, reasoning_effort,
+                status, lease_task_id, turn_count, microtask_count, created_utc,
+                last_used_utc, closed_utc, termination_reason)
+            VALUES (
+                $id, $missionId, $role, $provider, $threadId, $model, $reasoningEffort,
+                $status, $leaseTaskId, $turnCount, $microtaskCount, $createdUtc,
+                $lastUsedUtc, $closedUtc, $terminationReason)
+            ON CONFLICT(id) DO UPDATE SET
+                mission_id = excluded.mission_id,
+                role = excluded.role,
+                provider = excluded.provider,
+                thread_id = excluded.thread_id,
+                model = excluded.model,
+                reasoning_effort = excluded.reasoning_effort,
+                status = excluded.status,
+                lease_task_id = excluded.lease_task_id,
+                turn_count = excluded.turn_count,
+                microtask_count = excluded.microtask_count,
+                created_utc = excluded.created_utc,
+                last_used_utc = excluded.last_used_utc,
+                closed_utc = excluded.closed_utc,
+                termination_reason = excluded.termination_reason;
+            """;
+
+        command.Parameters.AddWithValue("$id", session.Id);
+        command.Parameters.AddWithValue("$missionId", session.MissionId);
+        command.Parameters.AddWithValue("$role", session.Role.ToString());
+        command.Parameters.AddWithValue("$provider", session.Provider);
+        command.Parameters.AddWithValue("$threadId", (object?)session.ThreadId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$model", session.Model);
+        command.Parameters.AddWithValue("$reasoningEffort", session.ReasoningEffort);
+        command.Parameters.AddWithValue("$status", session.Status.ToString());
+        command.Parameters.AddWithValue("$leaseTaskId", (object?)session.LeaseTaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$turnCount", session.TurnCount);
+        command.Parameters.AddWithValue("$microtaskCount", session.MicrotaskCount);
+        command.Parameters.AddWithValue("$createdUtc", FormatTimestamp(session.CreatedAtUtc));
+        command.Parameters.AddWithValue("$lastUsedUtc", FormatTimestamp(session.LastUsedAtUtc));
+        command.Parameters.AddWithValue(
+            "$closedUtc",
+            session.ClosedAtUtc is { } closed
+                ? FormatTimestamp(closed)
+                : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$terminationReason",
+            (object?)session.TerminationReason ?? DBNull.Value);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<AgentSession>> ListAgentSessionsAsync(
+        string missionId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, mission_id, role, provider, thread_id, model, reasoning_effort,
+                   status, lease_task_id, turn_count, microtask_count, created_utc,
+                   last_used_utc, closed_utc, termination_reason
+            FROM agent_sessions
+            WHERE mission_id = $missionId
+            ORDER BY created_utc, id;
+            """;
+        command.Parameters.AddWithValue("$missionId", missionId);
+
+        var sessions = new List<AgentSession>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            sessions.Add(new AgentSession(
+                reader.GetString(0),
+                reader.GetString(1),
+                Enum.Parse<AgentSessionRole>(reader.GetString(2)),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                Enum.Parse<AgentSessionStatus>(reader.GetString(7)),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.GetInt32(9),
+                reader.GetInt32(10),
+                ParseTimestamp(reader.GetString(11)),
+                ParseTimestamp(reader.GetString(12)),
+                reader.IsDBNull(13)
+                    ? null
+                    : ParseTimestamp(reader.GetString(13)),
+                reader.IsDBNull(14) ? null : reader.GetString(14)));
+        }
+
+        return sessions;
+    }
+
+    public async Task SaveAgentTurnAsync(
+        AgentTurn turn,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO agent_turns (
+                id, mission_id, session_id, task_id, purpose, turn_number, model,
+                reasoning_effort, input_tokens, cached_input_tokens,
+                cache_write_input_tokens, output_tokens, reasoning_output_tokens,
+                total_tokens, started_utc, completed_utc, duration_ms, success, error)
+            VALUES (
+                $id, $missionId, $sessionId, $taskId, $purpose, $turnNumber, $model,
+                $reasoningEffort, $inputTokens, $cachedInputTokens,
+                $cacheWriteInputTokens, $outputTokens, $reasoningOutputTokens,
+                $totalTokens, $startedUtc, $completedUtc, $durationMs, $success, $error)
+            ON CONFLICT(id) DO UPDATE SET
+                mission_id = excluded.mission_id,
+                session_id = excluded.session_id,
+                task_id = excluded.task_id,
+                purpose = excluded.purpose,
+                turn_number = excluded.turn_number,
+                model = excluded.model,
+                reasoning_effort = excluded.reasoning_effort,
+                input_tokens = excluded.input_tokens,
+                cached_input_tokens = excluded.cached_input_tokens,
+                cache_write_input_tokens = excluded.cache_write_input_tokens,
+                output_tokens = excluded.output_tokens,
+                reasoning_output_tokens = excluded.reasoning_output_tokens,
+                total_tokens = excluded.total_tokens,
+                started_utc = excluded.started_utc,
+                completed_utc = excluded.completed_utc,
+                duration_ms = excluded.duration_ms,
+                success = excluded.success,
+                error = excluded.error;
+            """;
+
+        command.Parameters.AddWithValue("$id", turn.Id);
+        command.Parameters.AddWithValue("$missionId", turn.MissionId);
+        command.Parameters.AddWithValue("$sessionId", turn.SessionId);
+        command.Parameters.AddWithValue("$taskId", (object?)turn.TaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$purpose", turn.Purpose.ToString());
+        command.Parameters.AddWithValue("$turnNumber", turn.TurnNumber);
+        command.Parameters.AddWithValue("$model", turn.Model);
+        command.Parameters.AddWithValue("$reasoningEffort", turn.ReasoningEffort);
+        AddTokenUsageParameters(command, turn.TokenUsage);
+        command.Parameters.AddWithValue("$startedUtc", FormatTimestamp(turn.StartedAtUtc));
+        command.Parameters.AddWithValue(
+            "$completedUtc",
+            turn.CompletedAtUtc is { } completed
+                ? FormatTimestamp(completed)
+                : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$durationMs",
+            turn.DurationMilliseconds is { } duration
+                ? duration
+                : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$success",
+            turn.Success is { } success
+                ? success ? 1 : 0
+                : DBNull.Value);
+        command.Parameters.AddWithValue("$error", (object?)turn.Error ?? DBNull.Value);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<AgentTurn>> ListAgentTurnsAsync(
+        string missionId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, mission_id, session_id, task_id, purpose, turn_number, model,
+                   reasoning_effort, input_tokens, cached_input_tokens,
+                   cache_write_input_tokens, output_tokens, reasoning_output_tokens,
+                   total_tokens, started_utc, completed_utc, duration_ms, success, error
+            FROM agent_turns
+            WHERE mission_id = $missionId
+            ORDER BY started_utc, id;
+            """;
+        command.Parameters.AddWithValue("$missionId", missionId);
+
+        var turns = new List<AgentTurn>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            TokenUsage? usage = null;
+            if (!reader.IsDBNull(8))
+            {
+                usage = new TokenUsage(
+                    reader.GetInt64(8),
+                    reader.GetInt64(9),
+                    reader.GetInt64(11),
+                    reader.GetInt64(12),
+                    reader.GetInt64(13))
+                {
+                    CacheWriteInputTokens = reader.GetInt64(10)
+                };
+            }
+
+            turns.Add(new AgentTurn(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                Enum.Parse<AgentTurnPurpose>(reader.GetString(4)),
+                reader.GetInt32(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                usage,
+                ParseTimestamp(reader.GetString(14)),
+                reader.IsDBNull(15)
+                    ? null
+                    : ParseTimestamp(reader.GetString(15)),
+                reader.IsDBNull(16) ? null : reader.GetInt64(16),
+                reader.IsDBNull(17) ? null : reader.GetInt64(17) != 0,
+                reader.IsDBNull(18) ? null : reader.GetString(18)));
+        }
+
+        return turns;
+    }
+
+    public async Task SaveRecoveryEpisodeAsync(
+        RecoveryEpisode episode,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO recovery_episodes (
+                id, mission_id, failed_task_id, cycle, status, failed_attempt_id,
+                recovery_turn_id, repair_task_ids_json, failure_evidence_json,
+                created_utc, updated_utc)
+            VALUES (
+                $id, $missionId, $failedTaskId, $cycle, $status, $failedAttemptId,
+                $recoveryTurnId, $repairTaskIdsJson, $failureEvidenceJson,
+                $createdUtc, $updatedUtc)
+            ON CONFLICT(id) DO UPDATE SET
+                mission_id = excluded.mission_id,
+                failed_task_id = excluded.failed_task_id,
+                cycle = excluded.cycle,
+                status = excluded.status,
+                failed_attempt_id = excluded.failed_attempt_id,
+                recovery_turn_id = excluded.recovery_turn_id,
+                repair_task_ids_json = excluded.repair_task_ids_json,
+                failure_evidence_json = excluded.failure_evidence_json,
+                created_utc = excluded.created_utc,
+                updated_utc = excluded.updated_utc;
+            """;
+
+        command.Parameters.AddWithValue("$id", episode.Id);
+        command.Parameters.AddWithValue("$missionId", episode.MissionId);
+        command.Parameters.AddWithValue("$failedTaskId", episode.FailedTaskId);
+        command.Parameters.AddWithValue("$cycle", episode.Cycle);
+        command.Parameters.AddWithValue("$status", episode.Status.ToString());
+        command.Parameters.AddWithValue(
+            "$failedAttemptId",
+            (object?)episode.FailedAttemptId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$recoveryTurnId",
+            (object?)episode.RecoveryTurnId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$repairTaskIdsJson",
+            JsonSerializer.Serialize(episode.RepairTaskIds));
+        command.Parameters.AddWithValue(
+            "$failureEvidenceJson",
+            (object?)episode.FailureEvidenceJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$createdUtc", FormatTimestamp(episode.CreatedAtUtc));
+        command.Parameters.AddWithValue("$updatedUtc", FormatTimestamp(episode.UpdatedAtUtc));
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<RecoveryEpisode>> ListRecoveryEpisodesAsync(
+        string missionId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, mission_id, failed_task_id, cycle, status, failed_attempt_id,
+                   recovery_turn_id, repair_task_ids_json, failure_evidence_json,
+                   created_utc, updated_utc
+            FROM recovery_episodes
+            WHERE mission_id = $missionId
+            ORDER BY failed_task_id, cycle;
+            """;
+        command.Parameters.AddWithValue("$missionId", missionId);
+
+        var episodes = new List<RecoveryEpisode>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            episodes.Add(new RecoveryEpisode(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt32(3),
+                Enum.Parse<RecoveryEpisodeStatus>(reader.GetString(4)),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                JsonSerializer.Deserialize<IReadOnlyList<string>>(
+                    reader.GetString(7)) ?? [],
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                ParseTimestamp(reader.GetString(9)),
+                ParseTimestamp(reader.GetString(10))));
+        }
+
+        return episodes;
+    }
+
+    private static void AddTokenUsageParameters(
+        SqliteCommand command,
+        TokenUsage? usage)
+    {
+        command.Parameters.AddWithValue(
+            "$inputTokens",
+            usage is null ? DBNull.Value : usage.InputTokens);
+        command.Parameters.AddWithValue(
+            "$cachedInputTokens",
+            usage is null ? DBNull.Value : usage.CachedInputTokens);
+        command.Parameters.AddWithValue(
+            "$cacheWriteInputTokens",
+            usage is null ? DBNull.Value : usage.CacheWriteInputTokens);
+        command.Parameters.AddWithValue(
+            "$outputTokens",
+            usage is null ? DBNull.Value : usage.OutputTokens);
+        command.Parameters.AddWithValue(
+            "$reasoningOutputTokens",
+            usage is null ? DBNull.Value : usage.ReasoningOutputTokens);
+        command.Parameters.AddWithValue(
+            "$totalTokens",
+            usage is null ? DBNull.Value : usage.TotalTokens);
     }
 
     private async Task<SqliteConnection> OpenConnectionAsync(
@@ -360,7 +884,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         await using (var missionCommand = connection.CreateCommand())
         {
             missionCommand.CommandText = """
-                SELECT id, goal, workspace_path, execution_mode, status, result, error, created_utc, updated_utc
+                SELECT id, goal, workspace_path, execution_mode, policy_json, status, result, error, created_utc, updated_utc
                 FROM missions
                 WHERE id = $id;
                 """;
@@ -374,11 +898,18 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     reader.GetString(1),
                     reader.GetString(2),
                     Enum.Parse<MissionExecutionMode>(reader.GetString(3)),
-                    Enum.Parse<MissionStatus>(reader.GetString(4)),
-                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    Enum.Parse<MissionStatus>(reader.GetString(5)),
                     reader.IsDBNull(6) ? null : reader.GetString(6),
-                    ParseTimestamp(reader.GetString(7)),
-                    ParseTimestamp(reader.GetString(8)));
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    ParseTimestamp(reader.GetString(8)),
+                    ParseTimestamp(reader.GetString(9)))
+                {
+                    Policy = reader.IsDBNull(4)
+                        ? MissionExecutionPolicy.Default
+                        : JsonSerializer.Deserialize<MissionExecutionPolicy>(
+                              reader.GetString(4))
+                          ?? MissionExecutionPolicy.Default
+                };
             }
         }
 
@@ -446,6 +977,9 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Parameters.AddWithValue("$goal", mission.Goal);
         command.Parameters.AddWithValue("$workspacePath", mission.WorkspacePath);
         command.Parameters.AddWithValue("$executionMode", mission.ExecutionMode.ToString());
+        command.Parameters.AddWithValue(
+            "$policyJson",
+            JsonSerializer.Serialize(mission.Policy));
         command.Parameters.AddWithValue("$status", mission.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)mission.Result ?? DBNull.Value);
         command.Parameters.AddWithValue("$error", (object?)mission.Error ?? DBNull.Value);
