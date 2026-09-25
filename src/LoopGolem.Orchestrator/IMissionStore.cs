@@ -52,4 +52,12 @@ public interface IMissionStore
     Task<IReadOnlyList<RecoveryCycle>> ListRecoveryCyclesAsync(
         string missionId,
         CancellationToken cancellationToken = default);
+
+    Task<MissionCapabilitySnapshot?> GetCapabilitySnapshotAsync(
+        string missionId,
+        CancellationToken cancellationToken = default);
+
+    Task UpsertCapabilitySnapshotAsync(
+        MissionCapabilitySnapshot snapshot,
+        CancellationToken cancellationToken = default);
 }
