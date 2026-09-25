@@ -274,7 +274,9 @@ public partial class MainWindow : Window
         }
 
         RenderTasks(response.Mission.Tasks);
-        RenderTelemetry(response.Telemetry);
+        RenderTelemetry(
+            response.Telemetry,
+            response.Mission.Mission.Policy.SessionReuse);
         _activeMissionId = response.Mission.Mission.Id;
 
         _missionPolling?.Cancel();
@@ -331,7 +333,9 @@ public partial class MainWindow : Window
             var mission = response.Mission.Mission;
             MissionStatusValue.Text = GetMissionStatusText(mission.Status);
             RenderTasks(response.Mission.Tasks);
-            RenderTelemetry(response.Telemetry);
+            RenderTelemetry(
+                response.Telemetry,
+                mission.Policy.SessionReuse);
 
             if (!string.IsNullOrWhiteSpace(mission.Result))
             {
@@ -480,7 +484,8 @@ public partial class MainWindow : Window
         };
 
     private void RenderTelemetry(
-        MissionTelemetrySummary? telemetry)
+        MissionTelemetrySummary? telemetry,
+        SessionReuseMode sessionReuse)
     {
         if (telemetry is null)
         {
@@ -490,6 +495,12 @@ public partial class MainWindow : Window
 
         var lines = new List<string>
         {
+            $"{LocalizationService.Get("WorkerContext")}: " +
+            LocalizationService.Get(
+                sessionReuse == SessionReuseMode.Affinity
+                    ? "Affinity"
+                    : "FreshPerTask"),
+
             $"{LocalizationService.Get("TotalTokens")}: " +
             $"{FormatTokenCount(telemetry.TotalTokens)} · " +
             $"{LocalizationService.Get("InputTokens")}: " +
