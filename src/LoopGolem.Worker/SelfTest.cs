@@ -588,6 +588,50 @@ internal static class SelfTest
             return false;
         }
 
+        var now = DateTimeOffset.UtcNow;
+        var sequencingSession = new AgentSession(
+            "sequencing-session",
+            "protocol-mission",
+            AgentSessionRole.Supervisor,
+            "gpt-6-luna",
+            "high",
+            "thread-123",
+            AgentSessionStatus.Active,
+            null,
+            1,
+            0,
+            null,
+            now,
+            now,
+            now);
+        var interruptedTurn = new AgentTurn(
+            "interrupted-turn",
+            "protocol-mission",
+            "protocol-task",
+            sequencingSession.Id,
+            AgentTurnPurpose.Recovery,
+            "gpt-6-luna",
+            "high",
+            2,
+            now,
+            null,
+            null,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0);
+
+        if (CodexSessionTransport.GetNextTurnNumber(
+                sequencingSession,
+                [interruptedTurn]) != 3)
+        {
+            Console.Error.WriteLine(
+                "Self-test Codex turn sequencing would reuse an interrupted turn number.");
+            return false;
+        }
+
         return true;
     }
 
