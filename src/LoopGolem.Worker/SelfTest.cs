@@ -406,8 +406,23 @@ internal static class SelfTest
                 return 1;
             }
 
-            if (persistedAttempts.Count != 1 ||
-                persistedAttempts[0] != attempt ||
+            var persistedFixtureAttempt =
+                persistedAttempts.SingleOrDefault(
+                    candidate =>
+                        candidate.Id == attempt.Id);
+            var runtimeAttempts =
+                persistedAttempts
+                    .Where(candidate =>
+                        candidate.Id != attempt.Id)
+                    .ToArray();
+
+            if (persistedFixtureAttempt != attempt ||
+                runtimeAttempts.Length !=
+                    persisted.Tasks.Count ||
+                runtimeAttempts.Any(
+                    candidate =>
+                        candidate.Outcome !=
+                            MissionTaskAttemptOutcome.Succeeded) ||
                 persistedSessions.Count != 1 ||
                 persistedSessions[0] != session ||
                 persistedTurns.Count != 1 ||
