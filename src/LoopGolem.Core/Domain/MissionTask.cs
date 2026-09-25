@@ -16,4 +16,5 @@ public sealed record MissionTask(
 {
     public string? ExecutionContext { get; init; }
     public int ExecutionAttemptCount { get; init; } = 0;
+    public TokenUsage? TokenUsage { get; init; }
 }
