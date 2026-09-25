@@ -21,6 +21,7 @@ public sealed class CodexPlanningService(
         new(JsonSerializerDefaults.Web);
 
     private readonly WslRuntimeService _wsl = new(processRunner);
+    private readonly GitSnapshotService _snapshots = new(processRunner);
 
     public async Task<TaskExecutionResult> PlanAsync(
         Mission mission,
@@ -40,6 +41,10 @@ public sealed class CodexPlanningService(
         {
             return cleanError;
         }
+
+        var baseCommit = await _snapshots.GetHeadCommitAsync(
+            mission.WorkspacePath,
+            cancellationToken);
 
         var run = await RunStructuredAsync(
             mission.WorkspacePath,
@@ -105,7 +110,162 @@ public sealed class CodexPlanningService(
 
         return TaskExecutionResult.Succeeded(
             plan.Summary,
-            JsonSerializer.Serialize(plan, JsonOptions));
+            JsonSerializer.Serialize(
+                new PlannerResult(baseCommit, plan),
+                JsonOptions));
+    }
+
+    public async Task<TaskExecutionResult> ValidateAsync(
+        Mission mission,
+        MissionTask task,
+        CancellationToken cancellationToken = default)
+    {
+        if (task.Definition is null ||
+            task.Kind != MissionTaskKind.ValidateMission)
+        {
+            return TaskExecutionResult.Failed(
+                "Validator task definition is missing.",
+                "LoopGolem did not provide validator context.");
+        }
+
+        ValidatorContext? context;
+        try
+        {
+            context = JsonSerializer.Deserialize<ValidatorContext>(
+                task.Definition.Prompt,
+                JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return TaskExecutionResult.Failed(
+                "Validator context is invalid.",
+                exception.Message);
+        }
+
+        if (context is null ||
+            string.IsNullOrWhiteSpace(context.BaseCommit))
+        {
+            return TaskExecutionResult.Failed(
+                "Validator context is incomplete.",
+                "The base commit or original plan is missing.");
+        }
+
+        var status = await runtime.GetStatusAsync(cancellationToken);
+        var runtimeError = ValidateRuntime(status);
+        if (runtimeError is not null)
+        {
+            return runtimeError;
+        }
+
+        string snapshotCommit;
+        try
+        {
+            snapshotCommit = await _snapshots.CreateSnapshotCommitAsync(
+                mission.WorkspacePath,
+                context.BaseCommit,
+                mission.Id,
+                cancellationToken);
+        }
+        catch (Exception exception)
+            when (exception is not OperationCanceledException)
+        {
+            return TaskExecutionResult.Failed(
+                "Could not create the validation snapshot.",
+                exception.Message);
+        }
+
+        var run = await RunStructuredAsync(
+            mission.WorkspacePath,
+            PlannerModel,
+            PlannerReasoning,
+            "read-only",
+            ValidatorSchema,
+            BuildValidatorPrompt(
+                mission,
+                context,
+                snapshotCommit),
+            cancellationToken);
+
+        DevelopmentDiagnostics.Write(
+            $"validator.raw:{context.Cycle}",
+            mission.Id,
+            run.FinalMessage);
+
+        if (run.Process.TimedOut)
+        {
+            return TaskExecutionResult.Failed(
+                "Validator timed out.",
+                "GPT-6 Luna High exceeded the validator timeout.",
+                run.Details);
+        }
+
+        if (run.Process.ExitCode != 0)
+        {
+            return TaskExecutionResult.Failed(
+                $"Validator exited with code {run.Process.ExitCode}.",
+                GetProcessError(run.Process),
+                run.Details);
+        }
+
+        ValidationResult? result;
+        try
+        {
+            result = JsonSerializer.Deserialize<ValidationResult>(
+                run.FinalMessage,
+                JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return TaskExecutionResult.Failed(
+                "Validator returned invalid JSON.",
+                exception.Message,
+                run.Details);
+        }
+
+        if (result is null ||
+            result.Status is not ("ok" or "not_ok"))
+        {
+            return TaskExecutionResult.Failed(
+                "Validator returned an unsupported result.",
+                result?.Status ?? "The structured result was empty.",
+                run.Details);
+        }
+
+        if (result.Status == "ok" && result.Tasks.Count != 0)
+        {
+            return TaskExecutionResult.Failed(
+                "Validator returned correction tasks with status ok.",
+                "An ok validation must return an empty task list.",
+                run.Details);
+        }
+
+        if (result.Status == "not_ok")
+        {
+            var taskError = MissionPlanValidator.ValidateTasks(result.Tasks);
+            if (taskError is not null)
+            {
+                return TaskExecutionResult.Failed(
+                    "Validator returned an invalid correction plan.",
+                    taskError,
+                    run.Details);
+            }
+
+            if (result.Tasks.Count == 0)
+            {
+                return TaskExecutionResult.Failed(
+                    "Validator returned not_ok without correction tasks.",
+                    "At least one correction task is required.",
+                    run.Details);
+            }
+        }
+
+        return TaskExecutionResult.Succeeded(
+            result.Summary,
+            JsonSerializer.Serialize(
+                new ValidatorExecutionResult(
+                    snapshotCommit,
+                    result),
+                JsonOptions));
     }
 
     public async Task<TaskExecutionResult> ExecuteMicroTaskAsync(
@@ -418,8 +578,57 @@ public sealed class CodexPlanningService(
         - Keep each Luna Low prompt self-contained and small.
         - For Luna Low set deterministic.kind to "none" and leave unused deterministic strings empty.
         - For deterministic tasks the deterministic object must fully specify the one operation.
-        - finalChecks lists repository-level checks for the future high-reasoning validator.
+        - finalChecks lists repository-level checks that the final GPT-6 Luna High validator must review.
+        - SELF-HOSTING RULE: if this mission modifies LoopGolem.Core, LoopGolem.Orchestrator, or LoopGolem.Worker, the currently running Worker will NOT hot-reload those changes. Do not make later tasks depend on newly implemented Worker runtime behavior becoming active in this same mission. Source/build/test checks may launch newly built child processes, but the current orchestrator process remains on its original binary.
         """;
+
+    private static string BuildValidatorPrompt(
+        Mission mission,
+        ValidatorContext context,
+        string snapshotCommit)
+    {
+        var planJson = JsonSerializer.Serialize(
+            context.Plan,
+            JsonOptions);
+
+        return $"""
+        You are the LoopGolem final validator running as GPT-6 Luna High.
+        You may inspect the entire repository, but you must not modify it.
+
+        ORIGINAL USER GOAL:
+        {mission.Goal}
+
+        ORIGINAL PLAN:
+        {planJson}
+
+        BASE COMMIT:
+        {context.BaseCommit}
+
+        SNAPSHOT COMMIT:
+        {snapshotCommit}
+
+        VALIDATION CYCLE:
+        {context.Cycle}
+
+        VALIDATION RULES:
+        - Review the actual implementation, not worker claims.
+        - Start with: git diff --stat {context.BaseCommit}..{snapshotCommit}
+        - Inspect the full diff with: git diff {context.BaseCommit}..{snapshotCommit}
+        - Read any repository files needed to judge correctness.
+        - Check the original user goal, every planned task, acceptance criteria, and finalChecks.
+        - The snapshot commit is an unreachable LoopGolem-created Git object. It does not move or modify the user's branch.
+        - Return status "ok" only when the snapshot satisfies the original goal and no correction is necessary.
+        - Otherwise return status "not_ok" with the smallest set of correction microtasks needed.
+        - Prefer small independent correction tasks.
+        - Use deterministic operations for exact mechanical corrections and luna_low for code or prose requiring judgment.
+        - Correction task readFiles/writeFiles must be precise repository-relative paths.
+        - Correction dependencies may refer only to other correction tasks in this response.
+        - Use unique correction ids prefixed with "fix{context.Cycle}_".
+        - Never request or assume a model above GPT-6 Luna. If the work is too complex to validate safely, use not_ok with bounded corrective tasks; LoopGolem will stop for human attention after its cycle limit.
+        - For luna_low set deterministic.kind to "none".
+        - Do not commit, push, create branches, or modify files.
+        """;
+    }
 
     private static string BuildWorkerPrompt(PlannedTask task)
     {
@@ -521,6 +730,89 @@ public sealed class CodexPlanningService(
             "blocker": { "type": "string" }
           },
           "required": ["outcome", "summary", "checks", "blocker"],
+          "additionalProperties": false
+        }
+        """;
+
+    private const string ValidatorSchema =
+        """
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["ok", "not_ok"]
+            },
+            "summary": { "type": "string" },
+            "tasks": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "title": { "type": "string" },
+                  "executor": {
+                    "type": "string",
+                    "enum": ["deterministic", "luna_low"]
+                  },
+                  "prompt": { "type": "string" },
+                  "readFiles": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "writeFiles": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "acceptanceChecks": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "dependsOn": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "deterministic": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["none", "write_file", "create_directory", "rename_path", "run_command"]
+                      },
+                      "path": { "type": "string" },
+                      "content": { "type": "string" },
+                      "sourcePath": { "type": "string" },
+                      "destinationPath": { "type": "string" },
+                      "executable": { "type": "string" },
+                      "arguments": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                      },
+                      "workingDirectory": { "type": "string" },
+                      "timeoutSeconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 900
+                      }
+                    },
+                    "required": [
+                      "kind", "path", "content", "sourcePath",
+                      "destinationPath", "executable", "arguments",
+                      "workingDirectory", "timeoutSeconds"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id", "title", "executor", "prompt", "readFiles",
+                  "writeFiles", "acceptanceChecks", "dependsOn", "deterministic"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["status", "summary", "tasks"],
           "additionalProperties": false
         }
         """;

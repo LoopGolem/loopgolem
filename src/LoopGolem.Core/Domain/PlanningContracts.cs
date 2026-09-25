@@ -47,11 +47,19 @@ public sealed record PlannerResult(
     string BaseCommit,
     MissionPlan Plan);
 
+public sealed record ValidatorContext(
+    string BaseCommit,
+    MissionPlan Plan,
+    int Cycle);
+
 public sealed record ValidationResult(
     string Status,
     string Summary,
-    IReadOnlyList<PlannedTask> Tasks,
-    string SnapshotCommit);
+    IReadOnlyList<PlannedTask> Tasks);
+
+public sealed record ValidatorExecutionResult(
+    string SnapshotCommit,
+    ValidationResult Result);
 
 public static class MissionPlanValidator
 {
