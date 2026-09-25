@@ -365,11 +365,20 @@ public sealed class CodexWorkerSessionService(
                         task.Id ==
                         latestTurn.TaskId);
 
-            if (previousTask?.Status !=
-                    DomainTaskStatus.Completed ||
+            if (previousTask is null ||
                 previousTask.Definition is null ||
                 currentTask.Definition is null)
             {
+                continue;
+            }
+
+            if (previousTask.Status !=
+                DomainTaskStatus.Completed)
+            {
+                await InvalidateAsync(
+                    candidate,
+                    "worker_task_not_committed",
+                    cancellationToken);
                 continue;
             }
 
