@@ -23,7 +23,7 @@ IMissionTaskExecutor[] executors =
     new ProjectDiscoveryExecutor(),
     new PlannerTaskExecutor(planning),
     new DeterministicTaskExecutor(processRunner),
-    new MicroTaskAgentExecutor(planning),
+    new MicroTaskAgentExecutor(planning, processRunner),
     new ValidatorTaskExecutor(planning),
     new GitChangesExecutor(processRunner),
     new DotNetBuildExecutor(processRunner)
