@@ -366,7 +366,7 @@ public partial class MainWindow : Window
 
             var status = new TextBlock
             {
-                Text = GetTaskStatusText(task.Status),
+                Text = GetTaskStatusDisplayText(task),
                 Opacity = 0.72,
                 Margin = new Thickness(12, 0, 18, 0)
             };
@@ -407,6 +407,23 @@ public partial class MainWindow : Window
         });
     }
 
+    private static string GetTaskStatusDisplayText(
+        MissionTask task)
+    {
+        var status = GetTaskStatusText(task.Status);
+
+        return task.TokenUsage is
+            {
+                TotalTokens: > 0
+            } usage
+            ? $"{status} · {FormatTokenCount(usage.TotalTokens)}"
+            : status;
+    }
+
+    private static string FormatTokenCount(long tokenCount) =>
+        $"{tokenCount.ToString("N0", LocalizationService.CurrentCulture)} " +
+        LocalizationService.Get("Tokens");
+
     private static string GetTaskStatusText(DomainTaskStatus status) =>
         LocalizationService.Get(status switch
         {
@@ -436,13 +453,31 @@ public partial class MainWindow : Window
         };
 
     private static string BuildDisplayResult(
-        IEnumerable<MissionTask> tasks) =>
-        string.Join(
+        IEnumerable<MissionTask> tasks)
+    {
+        var materialized = tasks
+            .OrderBy(task => task.Sequence)
+            .ToArray();
+
+        var lines = materialized
+            .Where(task => !string.IsNullOrWhiteSpace(task.Result))
+            .Select(task => $"{GetTaskTitle(task)}: {task.Result}")
+            .ToList();
+
+        var totalTokens = materialized.Sum(
+            task => task.TokenUsage?.TotalTokens ?? 0);
+
+        if (totalTokens > 0)
+        {
+            lines.Add(
+                $"{LocalizationService.Get("TotalTokens")}: " +
+                FormatTokenCount(totalTokens));
+        }
+
+        return string.Join(
             Environment.NewLine,
-            tasks
-                .OrderBy(task => task.Sequence)
-                .Where(task => !string.IsNullOrWhiteSpace(task.Result))
-                .Select(task => $"{GetTaskTitle(task)}: {task.Result}"));
+            lines);
+    }
 
     private static string GetWorkerErrorText(WorkerResponse response) =>
         response.ErrorCode switch
