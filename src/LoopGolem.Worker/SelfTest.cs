@@ -107,6 +107,26 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!VerifyCodexSessionProtocol())
+            {
+                return 1;
+            }
+
+            if (!await VerifyProcessStreamingAsync(
+                    processRunner,
+                    root))
+            {
+                return 1;
+            }
+
+            if (!await VerifyCodexThreadPersistenceAsync(
+                    processRunner,
+                    workspace,
+                    root))
+            {
+                return 1;
+            }
+
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
@@ -464,6 +484,289 @@ internal static class SelfTest
             Console.Error.WriteLine(
                 "Self-test could not parse Codex token usage.");
             return false;
+        }
+
+        return true;
+    }
+
+    private static bool VerifyCodexSessionProtocol()
+    {
+        var request = new CodexStructuredRunRequest(
+            "protocol-mission",
+            "protocol-task",
+            AgentSessionRole.Supervisor,
+            AgentTurnPurpose.Planning,
+            CodexSessionMode.FreshEphemeral,
+            null,
+            "/workspace",
+            "gpt-6-luna",
+            "high",
+            "read-only",
+            "{}",
+            "test prompt");
+
+        var ephemeral =
+            CodexSessionTransport.BuildArguments(
+                request,
+                "/workspace",
+                "/schema.json",
+                "/output.json",
+                null);
+
+        if (!ephemeral.Contains("--ephemeral") ||
+            ephemeral.Contains("resume") ||
+            !ContainsArgumentPair(
+                ephemeral,
+                "--disable",
+                "memories"))
+        {
+            Console.Error.WriteLine(
+                "Self-test Codex ephemeral arguments are invalid.");
+            return false;
+        }
+
+        var persistent =
+            CodexSessionTransport.BuildArguments(
+                request with
+                {
+                    SessionMode =
+                        CodexSessionMode.NewPersistent
+                },
+                "/workspace",
+                "/schema.json",
+                "/output.json",
+                null);
+
+        if (persistent.Contains("--ephemeral") ||
+            persistent.Contains("resume"))
+        {
+            Console.Error.WriteLine(
+                "Self-test Codex persistent arguments are invalid.");
+            return false;
+        }
+
+        var resumed =
+            CodexSessionTransport.BuildArguments(
+                request with
+                {
+                    SessionMode =
+                        CodexSessionMode.Resume,
+                    SessionId = "loop-session"
+                },
+                "/workspace",
+                "/schema.json",
+                "/output.json",
+                "thread-123");
+
+        var resumeIndex =
+            resumed.IndexOf("resume");
+
+        if (resumed.Contains("--ephemeral") ||
+            resumeIndex < 0 ||
+            resumeIndex + 2 >= resumed.Count ||
+            resumed[resumeIndex + 1] !=
+                "thread-123" ||
+            resumed[resumeIndex + 2] != "-")
+        {
+            Console.Error.WriteLine(
+                "Self-test Codex resume arguments are invalid.");
+            return false;
+        }
+
+        if (!CodexSessionTransport.TryParseThreadStarted(
+                "{\"type\":\"thread.started\",\"thread_id\":\"thread-123\"}",
+                out var threadId) ||
+            threadId != "thread-123" ||
+            CodexSessionTransport.TryParseThreadStarted(
+                "{\"type\":\"turn.started\"}",
+                out _))
+        {
+            Console.Error.WriteLine(
+                "Self-test could not parse Codex thread.started.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ContainsArgumentPair(
+        IReadOnlyList<string> arguments,
+        string first,
+        string second)
+    {
+        for (var index = 0;
+             index + 1 < arguments.Count;
+             index++)
+        {
+            if (arguments[index] == first &&
+                arguments[index + 1] == second)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task<bool>
+        VerifyProcessStreamingAsync(
+            ProcessRunner processRunner,
+            string root)
+    {
+        var streamed = new List<string>();
+
+        ProcessRunResult run;
+        if (OperatingSystem.IsWindows())
+        {
+            run = await processRunner.RunStreamingAsync(
+                "cmd.exe",
+                ["/d", "/s", "/c", "echo first&&echo second"],
+                root,
+                TimeSpan.FromSeconds(30),
+                standardOutputLineHandler:
+                    async line =>
+                    {
+                        await Task.Yield();
+                        streamed.Add(line.Trim());
+                    });
+        }
+        else
+        {
+            run = await processRunner.RunStreamingAsync(
+                "/bin/sh",
+                ["-c", "printf 'first\\nsecond\\n'"],
+                root,
+                TimeSpan.FromSeconds(30),
+                standardOutputLineHandler:
+                    async line =>
+                    {
+                        await Task.Yield();
+                        streamed.Add(line.Trim());
+                    });
+        }
+
+        if (run.TimedOut ||
+            run.ExitCode != 0 ||
+            !streamed.SequenceEqual(
+                ["first", "second"]))
+        {
+            Console.Error.WriteLine(
+                "Self-test process streaming did not preserve stdout lines.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
+        VerifyCodexThreadPersistenceAsync(
+            ProcessRunner processRunner,
+            string workspace,
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "codex-thread-capture.db");
+        var store = new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        var missionId =
+            $"codex-thread-{Guid.NewGuid():N}";
+        var taskId =
+            $"codex-thread-task-{Guid.NewGuid():N}";
+        var snapshot = new MissionSnapshot(
+            new Mission(
+                missionId,
+                "Verify crash-safe Codex thread capture.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now),
+            [
+                new MissionTask(
+                    taskId,
+                    missionId,
+                    1,
+                    MissionTaskKind.InspectWorkspace,
+                    "Thread capture placeholder",
+                    null,
+                    DomainTaskStatus.Ready,
+                    null,
+                    null,
+                    null,
+                    now,
+                    now)
+            ]);
+
+        await store.CreateAsync(snapshot);
+
+        var session = new AgentSession(
+            $"session-{Guid.NewGuid():N}",
+            missionId,
+            AgentSessionRole.Supervisor,
+            "gpt-6-luna",
+            "high",
+            null,
+            AgentSessionStatus.Active,
+            null,
+            0,
+            0,
+            null,
+            now,
+            now,
+            now);
+
+        await store.UpsertAgentSessionAsync(session);
+
+        var transport = new CodexSessionTransport(
+            processRunner,
+            new CodexCliService(processRunner),
+            store);
+
+        var captured =
+            await transport.CaptureThreadStartedAsync(
+                CodexSessionMode.NewPersistent,
+                session,
+                "thread-self-test");
+
+        var reopened =
+            new SqliteMissionStore(database);
+        await reopened.InitializeAsync();
+        var sessions =
+            await reopened.ListAgentSessionsAsync(
+                missionId);
+        var persisted =
+            sessions.SingleOrDefault(
+                candidate =>
+                    candidate.Id == session.Id);
+
+        if (captured.ProviderThreadId !=
+                "thread-self-test" ||
+            persisted?.ProviderThreadId !=
+                "thread-self-test")
+        {
+            Console.Error.WriteLine(
+                "Self-test did not persist thread.started immediately.");
+            return false;
+        }
+
+        try
+        {
+            await transport.CaptureThreadStartedAsync(
+                CodexSessionMode.Resume,
+                captured,
+                "wrong-thread");
+            Console.Error.WriteLine(
+                "Self-test accepted a mismatched resumed Codex thread.");
+            return false;
+        }
+        catch (InvalidDataException)
+        {
         }
 
         return true;
