@@ -14,6 +14,15 @@ public sealed class CodexPlanningService(
     public const string WorkerModel = "gpt-6-luna";
     public const string WorkerReasoning = "low";
 
+    internal const string SelfHostingRule =
+        "SELF-HOSTING RULE: if this mission modifies LoopGolem.Core, " +
+        "LoopGolem.Orchestrator, or LoopGolem.Worker, the currently running " +
+        "Worker will NOT hot-reload those changes. Do not make later tasks " +
+        "depend on newly implemented Worker runtime behavior becoming active " +
+        "in this same mission. Source/build/test checks may launch newly built " +
+        "child processes, but the current orchestrator process remains on its " +
+        "original binary.";
+
     private static readonly TimeSpan ExecutionTimeout =
         TimeSpan.FromMinutes(60);
 
@@ -566,7 +575,7 @@ public sealed class CodexPlanningService(
             "-"
         ];
 
-    private static string BuildPlannerPrompt(Mission mission) =>
+    internal static string BuildPlannerPrompt(Mission mission) =>
         $"""
         You are the LoopGolem mission planner running as GPT-6 Luna High.
         You may inspect the entire repository, but you must not modify it.
@@ -592,10 +601,10 @@ public sealed class CodexPlanningService(
         - For Luna Low set deterministic.kind to "none" and leave unused deterministic strings empty.
         - For deterministic tasks the deterministic object must fully specify the one operation.
         - finalChecks lists repository-level checks that the final GPT-6 Luna High validator must review.
-        - SELF-HOSTING RULE: if this mission modifies LoopGolem.Core, LoopGolem.Orchestrator, or LoopGolem.Worker, the currently running Worker will NOT hot-reload those changes. Do not make later tasks depend on newly implemented Worker runtime behavior becoming active in this same mission. Source/build/test checks may launch newly built child processes, but the current orchestrator process remains on its original binary.
+        - {SelfHostingRule}
         """;
 
-    private static string BuildValidatorPrompt(
+    internal static string BuildValidatorPrompt(
         Mission mission,
         ValidatorContext context,
         string snapshotCommit)
@@ -640,6 +649,7 @@ public sealed class CodexPlanningService(
         - Correction task readFiles/writeFiles must be precise repository-relative paths.
         - Correction dependencies may refer only to other correction tasks in this response.
         - Use unique correction ids prefixed with "fix{context.Cycle}_".
+        - {SelfHostingRule}
         - Never request or assume a model above GPT-6 Luna. If the work is too complex to validate safely, use not_ok with bounded corrective tasks; LoopGolem will stop for human attention after its cycle limit.
         - For luna_low set deterministic.kind to "none".
         - Do not commit, push, create branches, or modify files.
