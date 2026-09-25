@@ -24,7 +24,10 @@ public sealed record CodexStructuredRunRequest(
     string ReasoningEffort,
     string Sandbox,
     string Schema,
-    string Prompt);
+    string Prompt)
+{
+    public string? LeaseOwnerTaskId { get; init; }
+}
 
 public sealed record CodexStructuredRunResult(
     ProcessRunResult Process,
@@ -496,7 +499,7 @@ public sealed class CodexSessionTransport(
             isEphemeral
                 ? AgentSessionStatus.Closed
                 : AgentSessionStatus.Active,
-            null,
+            request.LeaseOwnerTaskId,
             0,
             0,
             isEphemeral

@@ -28,12 +28,17 @@ var supervisor =
     new CodexSupervisorSessionService(
         codexTransport,
         store);
+var workerSessions =
+    new CodexWorkerSessionService(
+        codexTransport,
+        store);
 var planning =
     new CodexPlanningService(
         processRunner,
         codex,
         codexTransport,
         supervisor,
+        workerSessions,
         capabilityService);
 
 IMissionTaskExecutor[] executors =

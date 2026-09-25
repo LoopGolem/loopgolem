@@ -25,4 +25,8 @@ public sealed record AgentTurn(
     long CacheWriteInputTokens,
     long OutputTokens,
     long ReasoningOutputTokens,
-    long TotalTokens);
+    long TotalTokens)
+{
+    public bool? ContextReuseRecommended { get; init; }
+    public string? ContextReuseReason { get; init; }
+}

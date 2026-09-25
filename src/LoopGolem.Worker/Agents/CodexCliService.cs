@@ -4,11 +4,16 @@ using LoopGolem.Worker.Infrastructure;
 
 namespace LoopGolem.Worker.Agents;
 
+public sealed record CodexContextReuseHint(
+    [property: JsonPropertyName("recommended")] bool Recommended,
+    [property: JsonPropertyName("reason")] string Reason);
+
 public sealed record CodexAgentOutcome(
     [property: JsonPropertyName("outcome")] string Outcome,
     [property: JsonPropertyName("summary")] string Summary,
     [property: JsonPropertyName("checks")] IReadOnlyList<string> Checks,
-    [property: JsonPropertyName("blocker")] string Blocker);
+    [property: JsonPropertyName("blocker")] string Blocker,
+    [property: JsonPropertyName("contextReuse")] CodexContextReuseHint ContextReuse);
 
 public sealed class CodexCliService
 {
