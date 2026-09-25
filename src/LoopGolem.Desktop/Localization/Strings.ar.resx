@@ -57,4 +57,6 @@
   <data name="CodexCliMissingWsl" xml:space="preserve"><value>ثبّت Codex داخل WSL</value></data>
   <data name="CodexAuthRequiredWsl" xml:space="preserve"><value>يلزم تسجيل الدخول إلى ChatGPT داخل WSL</value></data>
   <data name="CodexAuthRequired" xml:space="preserve"><value>يلزم تسجيل الدخول إلى ChatGPT</value></data>
+  <data name="Tokens" xml:space="preserve"><value>رموز</value></data>
+  <data name="TotalTokens" xml:space="preserve"><value>إجمالي الرموز</value></data>
 </root>
