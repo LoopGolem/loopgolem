@@ -1978,7 +1978,8 @@ internal static class SelfTest
                     null,
                     request.SessionId!,
                     providerThreadId,
-                    0);
+                    0,
+                    $"fake-turn-{Guid.NewGuid():N}");
             }
 
             if (request.SessionMode ==
@@ -2065,7 +2066,8 @@ internal static class SelfTest
                     12),
                 session.Id,
                 session.ProviderThreadId,
-                turnNumber);
+                turnNumber,
+                $"fake-turn-{Guid.NewGuid():N}");
     }
 
     private sealed class InterruptingPreparedExecutor(
