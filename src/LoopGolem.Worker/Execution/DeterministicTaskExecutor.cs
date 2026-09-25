@@ -5,10 +5,53 @@ using LoopGolem.Worker.Infrastructure;
 
 namespace LoopGolem.Worker.Execution;
 
+public sealed record DeterministicExecutionContext(
+    string OperationKind,
+    bool SourceExisted,
+    bool DestinationExisted);
+
 public sealed class DeterministicTaskExecutor(
-    ProcessRunner processRunner) : IMissionTaskExecutor
+    ProcessRunner processRunner) :
+    IMissionTaskExecutor,
+    IMissionTaskExecutionContextProvider
 {
     public MissionTaskKind Kind => MissionTaskKind.DeterministicWork;
+
+    public bool RequiresExecutionContext(MissionTask task) =>
+        task.Definition?.Executor == PlannedExecutorKinds.Deterministic &&
+        task.Definition.Deterministic.Kind ==
+            DeterministicOperationKinds.RenamePath;
+
+    public Task<string> CreateExecutionContextAsync(
+        Mission mission,
+        MissionTask task,
+        CancellationToken cancellationToken = default)
+    {
+        var definition = task.Definition
+            ?? throw new InvalidOperationException(
+                "Deterministic task definition is missing.");
+        var op = definition.Deterministic;
+
+        if (op.Kind != DeterministicOperationKinds.RenamePath)
+        {
+            throw new InvalidOperationException(
+                $"Operation '{op.Kind}' does not require deterministic recovery context.");
+        }
+
+        var source = ResolvePath(
+            mission.WorkspacePath,
+            op.SourcePath);
+        var destination = ResolvePath(
+            mission.WorkspacePath,
+            op.DestinationPath);
+
+        var context = new DeterministicExecutionContext(
+            op.Kind,
+            PathExists(source),
+            PathExists(destination));
+
+        return Task.FromResult(JsonSerializer.Serialize(context));
+    }
 
     public async Task<TaskExecutionResult> ExecuteAsync(
         Mission mission,
@@ -35,7 +78,7 @@ public sealed class DeterministicTaskExecutor(
                 DeterministicOperationKinds.CreateDirectory =>
                     CreateDirectory(mission, op),
                 DeterministicOperationKinds.RenamePath =>
-                    RenamePath(mission, op),
+                    RenamePath(mission, task, op),
                 DeterministicOperationKinds.RunCommand =>
                     await RunCommandAsync(mission, op, cancellationToken),
                 _ => TaskExecutionResult.Failed(
@@ -80,6 +123,7 @@ public sealed class DeterministicTaskExecutor(
 
     private static TaskExecutionResult RenamePath(
         Mission mission,
+        MissionTask task,
         DeterministicOperation op)
     {
         var source = ResolvePath(mission.WorkspacePath, op.SourcePath);
@@ -93,6 +137,23 @@ public sealed class DeterministicTaskExecutor(
                 "Create the destination directory in a dependency task first.");
         }
 
+        DeterministicExecutionContext? context = null;
+        if (!string.IsNullOrWhiteSpace(task.ExecutionContext))
+        {
+            try
+            {
+                context =
+                    JsonSerializer.Deserialize<DeterministicExecutionContext>(
+                        task.ExecutionContext);
+            }
+            catch (JsonException exception)
+            {
+                return TaskExecutionResult.Failed(
+                    "rename_path recovery context is invalid.",
+                    exception.Message);
+            }
+        }
+
         if (File.Exists(source))
         {
             File.Move(source, destination);
@@ -100,6 +161,18 @@ public sealed class DeterministicTaskExecutor(
         else if (Directory.Exists(source))
         {
             Directory.Move(source, destination);
+        }
+        else if (PathExists(destination) &&
+                 context is
+                 {
+                     OperationKind:
+                         DeterministicOperationKinds.RenamePath,
+                     SourceExisted: true,
+                     DestinationExisted: false
+                 })
+        {
+            return TaskExecutionResult.Succeeded(
+                $"Rename '{op.SourcePath}' to '{op.DestinationPath}' was already applied before recovery.");
         }
         else
         {
@@ -162,6 +235,9 @@ public sealed class DeterministicTaskExecutor(
             $"Command '{op.Executable}' completed successfully.",
             details);
     }
+
+    private static bool PathExists(string path) =>
+        File.Exists(path) || Directory.Exists(path);
 
     private static string ResolvePath(string workspaceRoot, string relativePath)
     {
