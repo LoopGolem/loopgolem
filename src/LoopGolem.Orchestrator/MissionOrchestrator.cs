@@ -267,14 +267,18 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                 }
 
                 var startedAt = DateTimeOffset.UtcNow;
+                var nextAttemptNumber =
+                    await AllocateAttemptNumberAsync(
+                        current,
+                        cancellationToken);
                 var running = current with
                 {
                     Status = recovering
                         ? DomainTaskStatus.Retrying
                         : DomainTaskStatus.Running,
                     ExecutionContext = executionContext,
-                    ExecutionAttemptCount = checked(
-                        current.ExecutionAttemptCount + 1),
+                    ExecutionAttemptCount =
+                        nextAttemptNumber,
                     Error = null,
                     UpdatedAtUtc = startedAt
                 };
@@ -1061,6 +1065,30 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
             PlannedExecutorKinds.Deterministic &&
         task.Definition.Deterministic.Kind ==
             DeterministicOperationKinds.RunCommand;
+
+    private async Task<int> AllocateAttemptNumberAsync(
+        MissionTask task,
+        CancellationToken cancellationToken)
+    {
+        var attempts =
+            await _store.ListTaskAttemptsAsync(
+                task.MissionId,
+                cancellationToken);
+        var highestPersisted =
+            attempts
+                .Where(attempt =>
+                    attempt.TaskId == task.Id)
+                .Select(attempt =>
+                    attempt.AttemptNumber)
+                .DefaultIfEmpty(
+                    task.ExecutionAttemptCount)
+                .Max();
+
+        return checked(
+            Math.Max(
+                task.ExecutionAttemptCount,
+                highestPersisted) + 1);
+    }
 
     private static string BuildAttemptId(
         string taskId,
