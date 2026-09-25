@@ -32,13 +32,17 @@ var workerSessions =
     new CodexWorkerSessionService(
         codexTransport,
         store);
+var validatorSessions =
+    new CodexValidatorSessionService(
+        codexTransport,
+        store);
 var planning =
     new CodexPlanningService(
         processRunner,
         codex,
-        codexTransport,
         supervisor,
         workerSessions,
+        validatorSessions,
         capabilityService);
 
 IMissionTaskExecutor[] executors =

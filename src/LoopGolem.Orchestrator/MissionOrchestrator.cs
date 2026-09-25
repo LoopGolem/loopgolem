@@ -6,8 +6,6 @@ namespace LoopGolem.Orchestrator;
 
 public sealed partial class MissionOrchestrator : IMissionOrchestrator
 {
-    private const int MaxValidationCycles = 3;
-
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
 
@@ -843,7 +841,9 @@ public sealed partial class MissionOrchestrator : IMissionOrchestrator
         }
 
         if (validatorContext.Cycle >=
-            MaxValidationCycles)
+            Math.Max(
+                1,
+                snapshot.Mission.Policy.MaxValidationCycles))
         {
             return (
                 snapshot,

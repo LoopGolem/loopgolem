@@ -15,9 +15,9 @@ Task states: Planned, Ready, Running, Verifying, Retrying, RecoveryPending, Esca
 5. Luna Low tasks are bounded by explicit read/write files and LoopGolem verifies their actual changed-file set. Transport context may be reused across strongly related sequential Luna Low tasks, but the tasks remain independent persisted units.
 6. After each implementation batch, deterministic Git inspection and available local .NET build verification run before final validation.
 7. LoopGolem creates an unreachable Git snapshot commit without moving the user's branch or real index.
-8. GPT-6 Luna High validates the original goal against the immutable base-to-snapshot diff.
-9. A `not_ok` validation may add a new correction batch. The correction batch is persisted before execution and then verified and validated again.
-10. After three validation cycles without `ok`, the mission becomes `NeedsHumanAttention` rather than escalating above Luna High.
+8. GPT-6 Luna High validates the original goal against the immutable base-to-snapshot diff in a dedicated persistent Validator session that is independent from the Supervisor used for planning/recovery.
+9. A `not_ok` validation may add a new correction batch. The correction batch is persisted before execution and then verified against a new immutable snapshot; if another cycle is allowed, the same Validator session resumes but must re-inspect the current diff rather than trust its prior conclusion.
+10. Validation stops at `MissionPolicy.MaxValidationCycles` (default 3). The final Validator session closes on `ok` or limit exhaustion, and the mission becomes `NeedsHumanAttention` at the limit rather than escalating above Luna High.
 11. A mission reaches Completed only after all scheduled tasks, including the final validator, are Completed.
 12. Recovery-relevant transitions and dynamically added tasks are persisted before the next external action.
 13. Mutable tasks persist their execution context before external work begins. An interrupted Luna Low task resumes as `Retrying` against its original Git workspace baseline.
@@ -32,7 +32,8 @@ Task states: Planned, Ready, Running, Verifying, Retrying, RecoveryPending, Esca
 22. Worker-session affinity requires both a positive Low context hint and deterministic graph/path affinity. A persisted lease prevents a Worker session from being reused concurrently; stale leases after restart invalidate that session.
 23. Worker context reuse is bounded by mission policy. The default is 3 accepted microtasks per persistent Low session, 30 idle minutes and 4 active Worker sessions. `SessionReuseMode.Disabled` forces fresh ephemeral Low calls for benchmark/control use.
 24. A Worker turn is reusable only after its owning mission task is durably `Completed`. Rejected work, unknown/incomplete turns and uncommitted prior tasks never donate context to another task.
-25. Quota exhaustion is a wait state rather than a mission failure; automatic paid API fallback is forbidden.
+25. Validator session selection is role-scoped. A missing Validator provider thread invalidates and replaces only the Validator session; the persistent Supervisor remains untouched.
+26. Quota exhaustion is a wait state rather than a mission failure; automatic paid API fallback is forbidden.
 
 ## Self-hosting
 

@@ -22,9 +22,9 @@ The current Codex execution architecture follows the principle: expensive intell
 6. LoopGolem verifies that a Luna Low worker did not change files outside its write allowlist.
 7. After a task batch, LoopGolem runs deterministic Git inspection and the available local .NET build verification.
 8. LoopGolem creates an **unreachable Git snapshot commit** from the working tree using a temporary index. The user's branch, index and HEAD are not moved.
-9. GPT-6 Luna High runs again as a read-only validator. It receives the original user goal, original plan, base commit, snapshot commit and the same persisted capability snapshot, and validates the actual diff.
-10. If validation returns `ok`, the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
-11. Corrections are executed and validated again. After three validator cycles without approval, the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
+9. GPT-6 Luna High opens a separate persistent read-only Validator session. It receives the original user goal, original plan, base commit, snapshot commit and the same persisted capability snapshot, and validates the actual diff. It never shares context with the Supervisor.
+10. If validation returns `ok`, the Validator session closes and the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
+11. Corrections are executed and the same Validator session reviews a new immutable snapshot on the next cycle. When `MissionPolicy.MaxValidationCycles` is reached without approval, the Validator closes and the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
 
 ## Luna Low session affinity
 
@@ -74,6 +74,8 @@ Each mission task has a persisted execution-attempt count plus normalized `missi
 Completed Codex calls also persist token usage on the task: input, cached input, output, optional reasoning output, and total tokens. Usage is accumulated when a task has more than one completed Codex attempt. Deterministic tasks consume no model tokens. The Desktop shows per-task totals and the aggregate mission total.
 
 The mission Supervisor is a persistent `AgentSession` whose provider thread id is captured from `thread.started`. Planning creates it; later recovery turns resume it. If Codex reports that the exact expected provider session no longer exists, the old logical session is invalidated and a replacement Supervisor is seeded from persisted mission/task/capability state. Generic provider failures are not treated as session loss.
+
+The mission Validator is a distinct persistent `AgentSessionRole.Validator`. The first validation creates it, correction cycles resume it, and no selection path can substitute the Supervisor because session resolution is role-scoped. A missing Validator provider thread invalidates only that Validator and starts a replacement from the current validation prompt. Final acceptance or validation-limit exhaustion closes the Validator session.
 
 Worker `AgentSession` rows additionally persist lease owner, accepted microtask count and termination reason. Worker `AgentTurn` rows persist the model's reuse hint alongside normal token telemetry, which allows benchmark analysis to compare fresh and resumed work by session and turn.
 
