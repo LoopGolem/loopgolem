@@ -976,6 +976,7 @@ public sealed class CodexPlanningService(
         - Do not pretend to execute a host-only tool from the agent environment.
         - Do not infer that an unprobed tool is unavailable.
         - Review the actual implementation, not worker claims.
+        - This Validator thread may persist across correction cycles, but prior Validator conclusions are context, not authority. Re-inspect the current snapshot independently on every cycle.
         - Start with: git diff --stat {context.BaseCommit}..{snapshotCommit}
         - Inspect the full diff with: git diff {context.BaseCommit}..{snapshotCommit}
         - Read any repository files needed to judge correctness.
