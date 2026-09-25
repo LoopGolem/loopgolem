@@ -11,6 +11,7 @@ public sealed class CodexPlanningService(
     CodexCliService runtime,
     ICodexSessionTransport transport,
     CodexSupervisorSessionService supervisor,
+    CodexWorkerSessionService workerSessions,
     EnvironmentCapabilityService capabilityService) :
     IMissionRecoveryPlanner
 {
@@ -522,22 +523,15 @@ public sealed class CodexPlanningService(
                 "The persisted workspace snapshot could not be restored.");
         }
 
-        var run = await transport.RunStructuredAsync(
-            new CodexStructuredRunRequest(
-                mission.Id,
-                task.Id,
-                AgentSessionRole.Worker,
-                AgentTurnPurpose.Work,
-                CodexSessionMode.FreshEphemeral,
-                null,
-                mission.WorkspacePath,
-                WorkerModel,
-                WorkerReasoning,
-                "workspace-write",
-                WorkerSchema,
-                BuildWorkerPrompt(
-                    definition,
-                    capabilities)),
+        var run = await workerSessions.RunWorkAsync(
+            mission,
+            task,
+            WorkerModel,
+            WorkerReasoning,
+            WorkerSchema,
+            BuildWorkerPrompt(
+                definition,
+                capabilities),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -547,18 +541,32 @@ public sealed class CodexPlanningService(
 
         if (run.Process.TimedOut)
         {
-            return TaskExecutionResult.Failed(
-                "Luna Low microtask timed out.",
-                "The microtask exceeded the one-hour timeout.",
-                run.Details, run.TokenUsage);
+            return await FinalizeWorkerRunAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Luna Low microtask timed out.",
+                    "The microtask exceeded the one-hour timeout.",
+                    run.Details,
+                    run.TokenUsage),
+                false,
+                "The worker timed out; its context is not safe to reuse.",
+                cancellationToken);
         }
 
         if (run.Process.ExitCode != 0)
         {
-            return TaskExecutionResult.Failed(
-                $"Luna Low exited with code {run.Process.ExitCode}.",
-                GetProcessError(run.Process),
-                run.Details, run.TokenUsage);
+            return await FinalizeWorkerRunAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    $"Luna Low exited with code {run.Process.ExitCode}.",
+                    GetProcessError(run.Process),
+                    run.Details,
+                    run.TokenUsage),
+                false,
+                "The worker process failed; its context is not safe to reuse.",
+                cancellationToken);
         }
 
         CodexAgentOutcome? outcome;
@@ -570,18 +578,32 @@ public sealed class CodexPlanningService(
         }
         catch (JsonException exception)
         {
-            return TaskExecutionResult.Failed(
-                "Luna Low returned invalid structured output.",
-                exception.Message,
-                run.Details, run.TokenUsage);
+            return await FinalizeWorkerRunAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Luna Low returned invalid structured output.",
+                    exception.Message,
+                    run.Details,
+                    run.TokenUsage),
+                false,
+                "The worker returned invalid structured output.",
+                cancellationToken);
         }
 
         if (outcome is null)
         {
-            return TaskExecutionResult.Failed(
-                "Luna Low returned no structured output.",
-                "The final response was empty.",
-                run.Details, run.TokenUsage);
+            return await FinalizeWorkerRunAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Luna Low returned no structured output.",
+                    "The final response was empty.",
+                    run.Details,
+                    run.TokenUsage),
+                false,
+                "The worker returned no reusable structured context hint.",
+                cancellationToken);
         }
 
         GitWorkspaceSnapshot after;
@@ -593,11 +615,19 @@ public sealed class CodexPlanningService(
                 cancellationToken);
         }
         catch (Exception exception)
+            when (exception is not OperationCanceledException)
         {
-            return TaskExecutionResult.Failed(
-                "Could not verify the workspace after the microtask.",
-                exception.Message,
-                run.Details, run.TokenUsage);
+            return await FinalizeWorkerRunAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Could not verify the workspace after the microtask.",
+                    exception.Message,
+                    run.Details,
+                    run.TokenUsage),
+                false,
+                "Deterministic post-task verification failed.",
+                cancellationToken);
         }
 
         var changedByTask = after.ChangesSince(before);
@@ -614,44 +644,87 @@ public sealed class CodexPlanningService(
 
         if (violations.Length > 0)
         {
-            return TaskExecutionResult.Failed(
-                "Luna Low modified files outside its write allowlist.",
-                string.Join(", ", violations),
-                run.Details, run.TokenUsage);
+            return await FinalizeWorkerRunAsync(
+                mission,
+                run,
+                TaskExecutionResult.Failed(
+                    "Luna Low modified files outside its write allowlist.",
+                    string.Join(", ", violations),
+                    run.Details,
+                    run.TokenUsage),
+                false,
+                "The worker violated its write allowlist.",
+                cancellationToken);
         }
 
-        return outcome.Outcome switch
+        var result = outcome.Outcome switch
         {
             "blocked" => TaskExecutionResult.Failed(
                 outcome.Summary,
                 string.IsNullOrWhiteSpace(outcome.Blocker)
                     ? "Luna Low reported a blocker."
                     : outcome.Blocker,
-                run.Details, run.TokenUsage),
+                run.Details,
+                run.TokenUsage),
             "changed" when changedByTask.Count == 0 =>
                 TaskExecutionResult.Failed(
                     "Luna Low reported changes, but no file changed.",
                     "The structured result disagrees with deterministic Git verification.",
-                    run.Details, run.TokenUsage),
+                    run.Details,
+                    run.TokenUsage),
             "changed" => TaskExecutionResult.Succeeded(
                 outcome.Summary,
-                run.Details, run.TokenUsage),
+                run.Details,
+                run.TokenUsage),
             "already_satisfied"
                 when changedByTask.Count > 0 &&
                      task.Status != LoopGolem.Core.Domain.TaskStatus.Retrying =>
                 TaskExecutionResult.Failed(
                     "Luna Low reported no edit was needed, but files changed.",
                     string.Join(", ", changedByTask),
-                    run.Details, run.TokenUsage),
+                    run.Details,
+                    run.TokenUsage),
             "already_satisfied" => TaskExecutionResult.Succeeded(
                 outcome.Summary,
-                run.Details, run.TokenUsage),
+                run.Details,
+                run.TokenUsage),
             _ => TaskExecutionResult.Failed(
                 "Luna Low returned an unsupported outcome.",
                 outcome.Outcome,
                 run.Details,
                 run.TokenUsage)
         };
+
+        return await FinalizeWorkerRunAsync(
+            mission,
+            run,
+            result,
+            result.Success &&
+                outcome.ContextReuse.Recommended,
+            result.Success
+                ? outcome.ContextReuse.Reason
+                : "The worker task was not accepted by deterministic verification.",
+            cancellationToken);
+    }
+
+    private async Task<TaskExecutionResult>
+        FinalizeWorkerRunAsync(
+            Mission mission,
+            CodexStructuredRunResult run,
+            TaskExecutionResult result,
+            bool contextReuseRecommended,
+            string contextReuseReason,
+            CancellationToken cancellationToken)
+    {
+        await workerSessions.CompleteWorkAsync(
+            mission,
+            run,
+            result.Success,
+            contextReuseRecommended,
+            contextReuseReason,
+            cancellationToken);
+
+        return result;
     }
 
     internal static TokenUsage? ParseTokenUsage(
@@ -876,6 +949,10 @@ public sealed class CodexPlanningService(
         - Return "blocked" if blocked.
         - Return "changed" only if a permitted file actually changed.
         - Return "already_satisfied" only if no edit was required.
+        - contextReuse.recommended is only a hint to LoopGolem; it never authorizes broader work.
+        - Set contextReuse.recommended=true only when your current repository understanding is likely to materially help an immediate follow-up microtask in the same area.
+        - Set it false when this task was isolated, the useful context is exhausted, or carrying it forward could confuse later work.
+        - Keep contextReuse.reason concise and technical.
         """;
     }
 
@@ -1023,9 +1100,18 @@ public sealed class CodexPlanningService(
               "type": "array",
               "items": { "type": "string" }
             },
-            "blocker": { "type": "string" }
+            "blocker": { "type": "string" },
+            "contextReuse": {
+              "type": "object",
+              "properties": {
+                "recommended": { "type": "boolean" },
+                "reason": { "type": "string" }
+              },
+              "required": ["recommended", "reason"],
+              "additionalProperties": false
+            }
           },
-          "required": ["outcome", "summary", "checks", "blocker"],
+          "required": ["outcome", "summary", "checks", "blocker", "contextReuse"],
           "additionalProperties": false
         }
         """;
