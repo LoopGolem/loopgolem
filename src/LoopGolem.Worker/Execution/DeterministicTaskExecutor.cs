@@ -118,7 +118,9 @@ public sealed class DeterministicTaskExecutor(
         CancellationToken cancellationToken)
     {
         var workingDirectory = string.IsNullOrWhiteSpace(op.WorkingDirectory)
-            ? mission.WorkspacePath
+            ? Path.GetFullPath(mission.WorkspacePath)
+            : op.WorkingDirectory == "."
+                ? Path.GetFullPath(mission.WorkspacePath)
             : ResolvePath(mission.WorkspacePath, op.WorkingDirectory);
 
         if (!Directory.Exists(workingDirectory))

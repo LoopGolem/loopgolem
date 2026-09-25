@@ -41,6 +41,13 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyRunCommandWorkingDirectoriesAsync(
+                    processRunner,
+                    workspace))
+            {
+                return 1;
+            }
+
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
@@ -189,6 +196,123 @@ internal static class SelfTest
         }
 
         return true;
+    }
+
+    private static async Task<bool> VerifyRunCommandWorkingDirectoriesAsync(
+        ProcessRunner processRunner,
+        string workspace)
+    {
+        var nestedDirectory = Path.Combine(workspace, "generated", "nested");
+        Directory.CreateDirectory(nestedDirectory);
+
+        var executor = new DeterministicTaskExecutor(processRunner);
+        var executable = OperatingSystem.IsWindows() ? "cmd.exe" : "pwd";
+        IReadOnlyList<string> arguments = OperatingSystem.IsWindows()
+            ? ["/c", "cd"]
+            : [];
+        foreach (var (workingDirectory, expectedDirectory) in new[]
+                 {
+                     (".", workspace),
+                     ("generated/nested", nestedDirectory)
+                 })
+        {
+            var result = await ExecuteRunCommandAsync(
+                executor,
+                workspace,
+                workingDirectory,
+                executable,
+                arguments);
+
+            if (result.Status != DomainTaskStatus.Completed)
+            {
+                Console.Error.WriteLine(
+                    $"Self-test run_command failed for working directory '{workingDirectory}'.");
+                return false;
+            }
+
+            var processResult = JsonSerializer.Deserialize<ProcessRunResult>(
+                result.ResultDetails ?? string.Empty);
+            if (processResult is null ||
+                !string.Equals(
+                    Path.GetFullPath(processResult.StandardOutput.Trim()),
+                    Path.GetFullPath(expectedDirectory),
+                    OperatingSystem.IsWindows()
+                        ? StringComparison.OrdinalIgnoreCase
+                        : StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine(
+                    $"Self-test run_command used the wrong working directory for '{workingDirectory}'.");
+                return false;
+            }
+        }
+
+        var rejected = await ExecuteRunCommandAsync(
+            executor,
+            workspace,
+            "..",
+            executable,
+            arguments);
+        if (rejected.Status != DomainTaskStatus.Failed)
+        {
+            Console.Error.WriteLine("Self-test run_command accepted a parent directory.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static Task<TaskExecutionResult> ExecuteRunCommandAsync(
+        DeterministicTaskExecutor executor,
+        string workspace,
+        string workingDirectory,
+        string executable,
+        IReadOnlyList<string> arguments)
+    {
+        var operation = new DeterministicOperation(
+            DeterministicOperationKinds.RunCommand,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            executable,
+            arguments,
+            workingDirectory,
+            30);
+        var definition = new PlannedTask(
+            "self-test-run-command",
+            "Verify run_command working directory",
+            PlannedExecutorKinds.Deterministic,
+            string.Empty,
+            [],
+            [],
+            [],
+            [],
+            operation);
+        var mission = new Mission(
+            "self-test",
+            "Verify run_command working directory handling",
+            workspace,
+            MissionExecutionMode.Codex,
+            MissionStatus.Running,
+            null,
+            null,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        var task = new MissionTask(
+            "self-test-run-command",
+            mission.Id,
+            0,
+            MissionTaskKind.DeterministicWork,
+            definition.Title,
+            definition,
+            DomainTaskStatus.Running,
+            null,
+            null,
+            null,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+
+        return executor.ExecuteAsync(mission, task);
     }
 
     private sealed class FakePlannerExecutor(
