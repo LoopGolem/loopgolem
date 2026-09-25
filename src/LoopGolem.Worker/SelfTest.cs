@@ -111,7 +111,8 @@ internal static class SelfTest
             }
 
             if (!VerifyTokenUsageParsing() ||
-                !VerifyCodexSessionArguments())
+                !VerifyCodexSessionArguments() ||
+                !VerifySupervisorSessionSelection())
             {
                 return 1;
             }
@@ -398,6 +399,67 @@ internal static class SelfTest
         {
             Console.Error.WriteLine(
                 "Self-test Codex session transport arguments are invalid.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool VerifySupervisorSessionSelection()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var older = new AgentSession(
+            "supervisor-old",
+            "mission",
+            AgentSessionRole.Supervisor,
+            "codex",
+            "thread-old",
+            "gpt-6-luna",
+            "high",
+            true,
+            AgentSessionStatus.Active,
+            null,
+            1,
+            0,
+            0,
+            now.AddMinutes(-2),
+            now.AddMinutes(-2),
+            null,
+            null);
+        var newer = older with
+        {
+            Id = "supervisor-new",
+            ThreadId = "thread-new",
+            CreatedAtUtc = now.AddMinutes(-1),
+            LastUsedAtUtc = now.AddMinutes(-1)
+        };
+
+        var disabled =
+            CodexPlanningService.SelectSupervisorSessionRequest(
+                MissionExecutionPolicy.Default,
+                [newer]);
+        var firstPersistent =
+            CodexPlanningService.SelectSupervisorSessionRequest(
+                new MissionExecutionPolicy(
+                    SessionReuse: SessionReuseMode.Affinity),
+                []);
+        var resumed =
+            CodexPlanningService.SelectSupervisorSessionRequest(
+                new MissionExecutionPolicy(
+                    SessionReuse: SessionReuseMode.Affinity),
+                [older, newer]);
+
+        if (disabled.Mode !=
+                CodexSessionMode.EphemeralFresh ||
+            firstPersistent.Mode !=
+                CodexSessionMode.NewPersistent ||
+            resumed.Mode !=
+                CodexSessionMode.Resume ||
+            resumed.SessionId != "supervisor-new" ||
+            resumed.ThreadId != "thread-new")
+        {
+            Console.Error.WriteLine(
+                "Self-test supervisor session selection is invalid.");
             return false;
         }
 
