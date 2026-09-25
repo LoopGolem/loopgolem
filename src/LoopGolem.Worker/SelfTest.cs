@@ -1072,10 +1072,16 @@ internal static class SelfTest
 
         if (!CodexSupervisorSessionService
                 .IsProviderSessionMissing(
-                    missingProcess) ||
+                    missingProcess,
+                    "missing-thread") ||
             CodexSupervisorSessionService
                 .IsProviderSessionMissing(
-                    quotaProcess))
+                    missingProcess,
+                    "different-thread") ||
+            CodexSupervisorSessionService
+                .IsProviderSessionMissing(
+                    quotaProcess,
+                    "missing-thread"))
         {
             Console.Error.WriteLine(
                 "Self-test Supervisor reset classification is too broad.");
