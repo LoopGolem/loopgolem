@@ -368,7 +368,7 @@ public partial class MainWindow : Window
             {
                 Text = GetTaskStatusText(task.Status),
                 Opacity = 0.72,
-                Margin = new Thickness(12, 0, 0, 0)
+                Margin = new Thickness(12, 0, 18, 0)
             };
             DockPanel.SetDock(status, Dock.Right);
 
