@@ -689,7 +689,7 @@ public sealed class CodexPlanningService(
             info.ValueKind == JsonValueKind.Object)
         {
             if (info.TryGetProperty(
-                    "last_token_usage",
+                    "total_token_usage",
                     out usage) &&
                 usage.ValueKind == JsonValueKind.Object)
             {
@@ -697,7 +697,7 @@ public sealed class CodexPlanningService(
             }
 
             if (info.TryGetProperty(
-                    "total_token_usage",
+                    "last_token_usage",
                     out usage) &&
                 usage.ValueKind == JsonValueKind.Object)
             {
