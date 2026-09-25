@@ -15,15 +15,16 @@ LoopGolem is a persistent orchestrator rather than a long-lived chat process.
 The current Codex execution architecture follows the principle: expensive intelligence decides; cheap intelligence executes; deterministic software verifies.
 
 1. A mission starts with deterministic workspace inspection and project discovery.
-2. GPT-6 Luna High runs as a read-only planner. It can inspect the repository and returns a structured dependency graph of small tasks.
-3. Exact mechanical work uses local deterministic operations such as `write_file`, `create_directory`, `rename_path` and direct `run_command` execution.
-4. Tasks requiring implementation judgment run as fresh GPT-6 Luna Low workers. Each worker receives only its bounded prompt, explicit read files, explicit write allowlist and acceptance checks.
-5. LoopGolem verifies that a Luna Low worker did not change files outside its write allowlist.
-6. After a task batch, LoopGolem runs deterministic Git inspection and the available local .NET build verification.
-7. LoopGolem creates an **unreachable Git snapshot commit** from the working tree using a temporary index. The user's branch, index and HEAD are not moved.
-8. GPT-6 Luna High runs again as a read-only validator. It receives the original user goal, original plan, base commit and snapshot commit, and validates the actual diff.
-9. If validation returns `ok`, the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
-10. Corrections are executed and validated again. After three validator cycles without approval, the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
+2. Codex missions capture a persisted capability snapshot for two independent environments: the agent environment (WSL2 on Windows, native on Linux) and the host deterministic-executor environment.
+3. GPT-6 Luna High runs as a read-only planner. It can inspect the repository, receives both capability sets, and returns a structured dependency graph of small tasks.
+4. Exact mechanical work uses local deterministic operations such as `write_file`, `create_directory`, `rename_path` and direct `run_command` execution.
+5. Tasks requiring implementation judgment run as fresh GPT-6 Luna Low workers. Each worker receives only its bounded prompt, explicit read files, explicit write allowlist and acceptance checks.
+6. LoopGolem verifies that a Luna Low worker did not change files outside its write allowlist.
+7. After a task batch, LoopGolem runs deterministic Git inspection and the available local .NET build verification.
+8. LoopGolem creates an **unreachable Git snapshot commit** from the working tree using a temporary index. The user's branch, index and HEAD are not moved.
+9. GPT-6 Luna High runs again as a read-only validator. It receives the original user goal, original plan, base commit and snapshot commit, and validates the actual diff.
+10. If validation returns `ok`, the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
+11. Corrections are executed and validated again. After three validator cycles without approval, the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
 
 ## Git snapshots
 
