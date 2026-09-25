@@ -83,4 +83,7 @@
   <data name="Supervisor" xml:space="preserve"><value>Supervisor</value></data>
   <data name="Validator" xml:space="preserve"><value>Validator</value></data>
   <data name="ReuseLowContext" xml:space="preserve"><value>Reuse Low context</value></data>
+  <data name="WorkerContext" xml:space="preserve"><value>Worker context</value></data>
+  <data name="Affinity" xml:space="preserve"><value>Affinity</value></data>
+  <data name="FreshPerTask" xml:space="preserve"><value>Fresh per task</value></data>
 </root>
