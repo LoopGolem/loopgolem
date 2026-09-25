@@ -87,7 +87,7 @@ LoopGolem has three explicit Codex CLI transport modes:
 
 The transport reads JSONL stdout incrementally. Persistent thread identity is therefore crash-safe once `thread.started` has been observed. Completed turns persist duration and token dimensions in `agent_turns`.
 
-Planner runs as the first turn of one persistent **Supervisor** session per mission. Deterministic-recovery planning resumes this same Supervisor through `Resume`, preserving the reasoning context that created the mission plan. The final Validator remains independent. Luna Low workers now have a separate bounded affinity-reuse policy described below; Supervisor and Worker sessions are never interchangeable.
+Planner runs as the first turn of one persistent **Supervisor** session per mission. Deterministic-recovery planning resumes this same Supervisor through `Resume`, preserving the reasoning context that created the mission plan. Validation uses a separate persistent **Validator** session that is never shared with Supervisor or Worker roles. Luna Low workers have their own bounded affinity-reuse policy; all three session roles remain isolated.
 
 If a Supervisor resume fails with the Codex CLI's explicit `Session not found: <expected-thread-id>` error, LoopGolem invalidates that logical session with reason `provider_session_not_found`, reconstructs mission context from persisted mission/task/capability state, and starts a replacement persistent Supervisor. Other errors such as quota/auth/transient failures do not trigger a session reset. An active Supervisor with no persisted provider thread id, a model/reasoning mismatch, or a duplicate active Supervisor is also invalidated deterministically before selection.
 
@@ -123,6 +123,12 @@ Codex is instructed not to commit, push, create branches or rewrite Git history.
 
 After deterministic Git/build verification, LoopGolem creates an unreachable snapshot commit using a temporary Git index. The user's branch and real index are unchanged.
 
+The first validation cycle creates a dedicated persistent GPT-6 Luna High Validator session. If validation returns `not_ok` and policy permits another cycle, the next validation resumes that same Validator thread so it retains the review context and the corrections it previously requested. This thread is independent from the persistent Supervisor used for planning/recovery and from all Luna Low Worker sessions.
+
+Persistence does not allow the Validator to treat its own prior conclusion as authoritative. Every cycle receives a newly created immutable snapshot commit and is explicitly instructed to re-inspect the current `baseCommit..snapshotCommit` diff. Prior Validator reasoning is context only.
+
+If the exact Validator provider thread disappears, LoopGolem invalidates only that Validator session and starts a replacement persistent Validator from the current self-contained validation prompt. The Supervisor session is untouched. A valid final `ok` closes the Validator session; a final `not_ok` at the configured validation limit closes it with `validation_limit_reached`. Invalid structured output or failed Validator execution invalidates the session.
+
 GPT-6 Luna High receives:
 
 - the original user goal;
@@ -135,7 +141,7 @@ The validator inspects `git diff baseCommit..snapshotCommit` in read-only mode. 
 - `ok`: the mission satisfies the original goal;
 - `not_ok`: a bounded correction task batch.
 
-Correction batches use the same deterministic/Luna Low task format. LoopGolem runs at most three validation cycles before stopping for human attention.
+Correction batches use the same deterministic/Luna Low task format. LoopGolem uses `MissionPolicy.MaxValidationCycles` (default 3) before stopping for human attention.
 
 ## Permission model
 
