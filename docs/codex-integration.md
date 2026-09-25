@@ -51,6 +51,19 @@ validator: gpt-6-luna / high
 
 LoopGolem never automatically escalates above GPT-6 Luna High. Repeated validation failure becomes `NeedsHumanAttention`.
 
+## Environment capabilities
+
+Before the first Codex task for a mission, LoopGolem captures and persists a mission-level capability snapshot for two distinct execution environments:
+
+- **agent environment**: where Planner/Luna Low/Validator commands execute. On Windows this is the selected WSL distribution; on Linux it is the native environment.
+- **deterministic host environment**: where LoopGolem deterministic `run_command` and local verification executors run. On Windows this is Windows itself.
+
+The initial probe deliberately covers only `git` and `dotnet`, including version text when available. A listed tool marked unavailable is a known capability boundary. A tool that is not listed was not probed and has unknown availability.
+
+The snapshot is persisted once per mission and reused across Worker restarts instead of being silently refreshed. This keeps planning, execution and later benchmark telemetry tied to the same observed environment assumptions.
+
+Planner, Luna Low and Validator prompts receive the snapshot. The planner must not assign a known-unavailable agent tool to Luna Low or place a host-only command in a Luna Low acceptance check. If a required check is available on the deterministic host but unavailable in the agent environment, the planner should schedule deterministic host verification instead. Luna Low and Validator are explicitly told not to retry known-unavailable agent tools.
+
 ## Planner
 
 The planner runs read-only with repository-wide visibility. Its hidden contract requires a structured plan of small dependency-aware tasks containing precise read files, write files and acceptance checks.
