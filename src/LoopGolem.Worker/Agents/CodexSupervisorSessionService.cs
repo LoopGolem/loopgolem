@@ -70,6 +70,15 @@ public sealed class CodexSupervisorSessionService(
             ? CodexSessionMode.NewPersistent
             : CodexSessionMode.Resume;
 
+        var initialPrompt =
+            session is null &&
+            purpose == AgentTurnPurpose.Recovery
+                ? await BuildResetPromptAsync(
+                    mission.Id,
+                    prompt,
+                    cancellationToken)
+                : prompt;
+
         var request = new CodexStructuredRunRequest(
             mission.Id,
             taskId,
@@ -82,7 +91,7 @@ public sealed class CodexSupervisorSessionService(
             reasoningEffort,
             "read-only",
             schema,
-            prompt);
+            initialPrompt);
 
         var result =
             await transport.RunStructuredAsync(
