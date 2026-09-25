@@ -253,7 +253,9 @@ public sealed class CodexPlanningService(
         }
 
         var expectedPrefix =
-            $"repair{cycle.CycleNumber}_";
+            RecoveryTaskNaming.GetRepairPrefix(
+                failedTask.Id,
+                cycle.CycleNumber);
 
         foreach (var repair in plan.Tasks)
         {
@@ -717,6 +719,11 @@ public sealed class CodexPlanningService(
                 "... [evidence truncated for recovery prompt]";
         }
 
+        var repairPrefix =
+            RecoveryTaskNaming.GetRepairPrefix(
+                failedTask.Id,
+                cycle.CycleNumber);
+
         return $"""
         You are the persistent LoopGolem mission Supervisor running as GPT-6 Luna High.
         A deterministic host check completed and failed with known evidence.
@@ -749,7 +756,7 @@ public sealed class CodexPlanningService(
         - Diagnose the concrete cause of the deterministic failure from repository state and the evidence above.
         - Return the smallest useful set of repair microtasks.
         - Every repair task MUST use executor "luna_low".
-        - Every repair id MUST start with "repair{cycle.CycleNumber}_".
+        - Every repair id MUST start with "{repairPrefix}".
         - A recovery cycle may contain at most 12 repair tasks.
         - Repair dependencies may refer only to other repair tasks in this response.
         - Keep each repair task narrow and independently understandable.
