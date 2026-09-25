@@ -311,10 +311,10 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, definition_json, status,
+                id, mission_id, sequence, kind, title, definition_json, execution_context, status,
                 result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $definitionJson, $status,
+                $id, $missionId, $sequence, $kind, $title, $definitionJson, $executionContext, $status,
                 $result, $resultDetails, $error, $createdUtc, $updatedUtc)
             ON CONFLICT(id) DO UPDATE SET
                 sequence = excluded.sequence,
