@@ -368,7 +368,9 @@ public sealed class CodexPlanningService(
             WorkerReasoning,
             "workspace-write",
             WorkerSchema,
-            BuildWorkerPrompt(definition),
+            BuildWorkerPrompt(
+                mission,
+                definition),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -1072,24 +1074,40 @@ public sealed class CodexPlanningService(
             ? count
             : 0;
 
-    internal static string BuildPlannerPrompt(Mission mission) =>
-        $"""
+    internal static string BuildPlannerPrompt(Mission mission)
+    {
+        var capabilities = mission.Capabilities is null
+            ? "Capability snapshot is unavailable."
+            : JsonSerializer.Serialize(
+                mission.Capabilities,
+                JsonOptions);
+
+        return $"""
         You are the LoopGolem mission planner running as GPT-6 Luna High.
         You may inspect the entire repository, but you must not modify it.
 
         USER GOAL:
         {mission.Goal}
 
+        EXECUTION CAPABILITIES:
+        {capabilities}
+
         Produce only the structured execution plan required by the schema.
 
         RULES:
         - Prefer many small, independently verifiable microtasks over broad tasks.
         - Every task id must be short, unique, stable, and referenced by dependsOn.
+        - The capability snapshot has two independent environments:
+          agentEnvironment is where Codex/Luna workers execute;
+          hostEnvironment is where LoopGolem deterministic executors run.
+        - Never ask a Luna Low worker to execute a tool marked unavailable in agentEnvironment.
+        - A tool available only in hostEnvironment may still be used through deterministic run_command checkpoints.
+        - Prefer host deterministic build/test checkpoints when the host has the required tool and the agent environment does not.
         - Use executor "deterministic" whenever the operation is exact and mechanical.
         - Deterministic operations are write_file, create_directory, rename_path, or run_command.
         - run_command is direct process execution: executable plus arguments, never a shell command string.
         - Use executor "luna_low" when implementation judgment is required.
-        - Luna Low receives only its microtask prompt, readFiles, writeFiles, and acceptanceChecks.
+        - Luna Low receives only its microtask prompt, readFiles, writeFiles, acceptanceChecks, and the environment capability snapshot.
         - Make readFiles and writeFiles precise repository-relative paths.
         - Luna Low may write ONLY writeFiles; include every file it must modify.
         - Use dependsOn whenever a task requires files or state produced by another task.
@@ -1100,6 +1118,7 @@ public sealed class CodexPlanningService(
         - finalChecks lists repository-level checks that the final GPT-6 Luna High validator must review.
         - {SelfHostingRule}
         """;
+    }
 
     internal static string BuildValidatorPrompt(
         Mission mission,
@@ -1153,16 +1172,27 @@ public sealed class CodexPlanningService(
         """;
     }
 
-    private static string BuildWorkerPrompt(PlannedTask task)
+    internal static string BuildWorkerPrompt(
+        Mission mission,
+        PlannedTask task)
     {
         static string Lines(IEnumerable<string> values) =>
             string.Join(Environment.NewLine, values.Select(value => $"- {value}"));
+
+        var capabilities = mission.Capabilities is null
+            ? "Capability snapshot is unavailable."
+            : JsonSerializer.Serialize(
+                mission.Capabilities,
+                JsonOptions);
 
         return $"""
         TASK {task.Id}: {task.Title}
 
         GOAL:
         {task.Prompt}
+
+        EXECUTION CAPABILITIES:
+        {capabilities}
 
         READ FILES:
         {Lines(task.ReadFiles)}
@@ -1175,11 +1205,14 @@ public sealed class CodexPlanningService(
 
         RULES:
         - This is one microtask. Do not broaden scope.
+        - You execute inside agentEnvironment, not hostEnvironment.
+        - Do not attempt tools marked unavailable in agentEnvironment.
+        - hostEnvironment capabilities are informational; you cannot directly invoke host-only tools.
         - Read the listed files first.
         - Do not modify any file outside ALLOWED WRITE FILES.
         - Do not commit, push, create branches, or rewrite Git history.
         - Network access is disabled.
-        - Run acceptance checks when practical.
+        - Run acceptance checks when practical and available in agentEnvironment.
         - Return "blocked" if blocked.
         - Return "changed" only if a permitted file actually changed.
         - Return "already_satisfied" only if no edit was required.
