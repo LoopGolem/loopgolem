@@ -62,7 +62,11 @@ public sealed class CodexSessionTransport(
             request,
             cancellationToken);
 
-        var turnNumber = checked(session.TurnCount + 1);
+        var turnNumber =
+            await AllocateTurnNumberAsync(
+                request.MissionId,
+                session,
+                cancellationToken);
         var startedAt = DateTimeOffset.UtcNow;
         var turn = new AgentTurn(
             Guid.NewGuid().ToString("N"),
@@ -311,6 +315,32 @@ public sealed class CodexSessionTransport(
         }
     }
 
+    private async Task<int> AllocateTurnNumberAsync(
+        string missionId,
+        AgentSession session,
+        CancellationToken cancellationToken)
+    {
+        var turns =
+            await store.ListAgentTurnsAsync(
+                missionId,
+                cancellationToken);
+        var highestPersisted =
+            turns
+                .Where(turn =>
+                    string.Equals(
+                        turn.SessionId,
+                        session.Id,
+                        StringComparison.Ordinal))
+                .Select(turn => turn.TurnNumber)
+                .DefaultIfEmpty(session.TurnCount)
+                .Max();
+
+        return checked(
+            Math.Max(
+                session.TurnCount,
+                highestPersisted) + 1);
+    }
+
     internal async Task<AgentSession>
         CaptureThreadStartedAsync(
             CodexSessionMode sessionMode,
@@ -329,6 +359,19 @@ public sealed class CodexSessionTransport(
         {
             throw new InvalidDataException(
                 $"Codex resumed thread '{threadId}', but LoopGolem expected '{session.ProviderThreadId}'.");
+        }
+
+        if (sessionMode ==
+                CodexSessionMode.NewPersistent &&
+            !string.IsNullOrWhiteSpace(
+                session.ProviderThreadId) &&
+            !string.Equals(
+                session.ProviderThreadId,
+                threadId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Codex emitted a second thread id '{threadId}' after '{session.ProviderThreadId}' was already captured.");
         }
 
         if (sessionMode !=
