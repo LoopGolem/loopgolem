@@ -1018,6 +1018,8 @@ internal static class SelfTest
                 AgentTurnPurpose.Recovery ||
             resetRecovery.SessionId ==
                 firstSessionId ||
+            resetRecovery.ProviderThreadId ==
+                planning.ProviderThreadId ||
             !restartedTransport.Requests[2].Prompt.Contains(
                 "SUPERVISOR SESSION RESET",
                 StringComparison.Ordinal) ||
@@ -1931,8 +1933,6 @@ internal static class SelfTest
     private sealed class FakeSupervisorTransport(
         IMissionStore store) : ICodexSessionTransport
     {
-        private int _threadNumber;
-
         public List<CodexStructuredRunRequest> Requests { get; } = [];
 
         public bool FailNextResumeAsMissing { get; set; }
@@ -1974,7 +1974,7 @@ internal static class SelfTest
                 var sessionId =
                     $"fake-supervisor-{Guid.NewGuid():N}";
                 var threadId =
-                    $"fake-thread-{++_threadNumber}";
+                    $"fake-thread-{Guid.NewGuid():N}";
                 var session = new AgentSession(
                     sessionId,
                     request.MissionId,
