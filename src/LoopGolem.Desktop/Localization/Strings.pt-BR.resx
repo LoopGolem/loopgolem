@@ -82,4 +82,5 @@
   <data name="ByRole" xml:space="preserve"><value>Por função</value></data>
   <data name="Supervisor" xml:space="preserve"><value>Supervisor</value></data>
   <data name="Validator" xml:space="preserve"><value>Validador</value></data>
+  <data name="ReuseLowContext" xml:space="preserve"><value>Reusar contexto Low</value></data>
 </root>
