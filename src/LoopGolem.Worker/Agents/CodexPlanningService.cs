@@ -8,7 +8,8 @@ namespace LoopGolem.Worker.Agents;
 public sealed class CodexPlanningService(
     ProcessRunner processRunner,
     CodexCliService runtime,
-    CodexSessionTransport transport)
+    CodexSessionTransport transport,
+    EnvironmentCapabilityService capabilityService)
 {
 
     public const string PlannerModel = "gpt-6-luna";
@@ -42,6 +43,12 @@ public sealed class CodexPlanningService(
             return runtimeError;
         }
 
+        var capabilities =
+            await capabilityService.GetOrCaptureAsync(
+                mission,
+                status,
+                cancellationToken);
+
         var cleanError = await EnsureCleanGitAsync(
             mission.WorkspacePath,
             cancellationToken);
@@ -67,7 +74,9 @@ public sealed class CodexPlanningService(
                 PlannerReasoning,
                 "read-only",
                 PlannerSchema,
-                BuildPlannerPrompt(mission)),
+                BuildPlannerPrompt(
+                    mission,
+                    capabilities)),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -173,6 +182,12 @@ public sealed class CodexPlanningService(
             return runtimeError;
         }
 
+        var capabilities =
+            await capabilityService.GetOrCaptureAsync(
+                mission,
+                status,
+                cancellationToken);
+
         string snapshotCommit;
         try
         {
@@ -206,7 +221,8 @@ public sealed class CodexPlanningService(
                 BuildValidatorPrompt(
                     mission,
                     context,
-                    snapshotCommit)),
+                    snapshotCommit,
+                    capabilities)),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -326,6 +342,12 @@ public sealed class CodexPlanningService(
             return runtimeError;
         }
 
+        var capabilities =
+            await capabilityService.GetOrCaptureAsync(
+                mission,
+                status,
+                cancellationToken);
+
         if (string.IsNullOrWhiteSpace(task.ExecutionContext))
         {
             return TaskExecutionResult.Failed(
@@ -367,7 +389,9 @@ public sealed class CodexPlanningService(
                 WorkerReasoning,
                 "workspace-write",
                 WorkerSchema,
-                BuildWorkerPrompt(definition)),
+                BuildWorkerPrompt(
+                    definition,
+                    capabilities)),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -489,13 +513,18 @@ public sealed class CodexPlanningService(
         CodexSessionTransport.ParseTokenUsage(
             jsonLines);
 
-    internal static string BuildPlannerPrompt(Mission mission) =>
+    internal static string BuildPlannerPrompt(
+        Mission mission,
+        MissionCapabilitySnapshot capabilities) =>
         $"""
         You are the LoopGolem mission planner running as GPT-6 Luna High.
         You may inspect the entire repository, but you must not modify it.
 
         USER GOAL:
         {mission.Goal}
+
+        EXECUTION CAPABILITIES:
+        {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
 
         Produce only the structured execution plan required by the schema.
 
@@ -504,7 +533,11 @@ public sealed class CodexPlanningService(
         - Every task id must be short, unique, stable, and referenced by dependsOn.
         - Use executor "deterministic" whenever the operation is exact and mechanical.
         - Deterministic operations are write_file, create_directory, rename_path, or run_command.
-        - run_command is direct process execution: executable plus arguments, never a shell command string.
+        - run_command is direct process execution on the DETERMINISTIC HOST: executable plus arguments, never a shell command string.
+        - Luna Low runs in the AGENT ENVIRONMENT, not on the deterministic host.
+        - Never ask Luna Low to execute a probed tool marked UNAVAILABLE in the agent environment.
+        - When a required check uses a tool available on the host but unavailable in the agent environment, schedule that check as deterministic host work instead of asking Luna Low to run it.
+        - Do not infer that an unprobed tool is unavailable.
         - Use executor "luna_low" when implementation judgment is required.
         - Luna Low receives only its microtask prompt, readFiles, writeFiles, and acceptanceChecks.
         - Make readFiles and writeFiles precise repository-relative paths.
@@ -521,7 +554,8 @@ public sealed class CodexPlanningService(
     internal static string BuildValidatorPrompt(
         Mission mission,
         ValidatorContext context,
-        string snapshotCommit)
+        string snapshotCommit,
+        MissionCapabilitySnapshot capabilities)
     {
         var planJson = JsonSerializer.Serialize(
             context.Plan,
@@ -549,7 +583,14 @@ public sealed class CodexPlanningService(
         VALIDATION CYCLE:
         {context.Cycle}
 
+        EXECUTION CAPABILITIES:
+        {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
+
         VALIDATION RULES:
+        - You execute inside the AGENT ENVIRONMENT. Do not attempt a probed tool marked UNAVAILABLE there.
+        - Deterministic host checks run before validation; reaching this validator means the preceding scheduled deterministic checks completed successfully.
+        - Do not pretend to execute a host-only tool from the agent environment.
+        - Do not infer that an unprobed tool is unavailable.
         - Review the actual implementation, not worker claims.
         - Start with: git diff --stat {context.BaseCommit}..{snapshotCommit}
         - Inspect the full diff with: git diff {context.BaseCommit}..{snapshotCommit}
@@ -570,7 +611,9 @@ public sealed class CodexPlanningService(
         """;
     }
 
-    private static string BuildWorkerPrompt(PlannedTask task)
+    internal static string BuildWorkerPrompt(
+        PlannedTask task,
+        MissionCapabilitySnapshot capabilities)
     {
         static string Lines(IEnumerable<string> values) =>
             string.Join(Environment.NewLine, values.Select(value => $"- {value}"));
@@ -590,7 +633,14 @@ public sealed class CodexPlanningService(
         ACCEPTANCE CHECKS:
         {Lines(task.AcceptanceChecks)}
 
+        EXECUTION CAPABILITIES:
+        {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
+
         RULES:
+        - You execute only in the AGENT ENVIRONMENT.
+        - Do not attempt a probed tool marked UNAVAILABLE in the agent environment, even if an acceptance check mentions it.
+        - Host-only checks are performed separately by LoopGolem. Do not return blocked solely because a host-only check cannot run in your environment.
+        - Do not infer that an unprobed tool is unavailable.
         - This is one microtask. Do not broaden scope.
         - Read the listed files first.
         - Do not modify any file outside ALLOWED WRITE FILES.
