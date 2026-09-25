@@ -104,6 +104,8 @@ LoopGolem invokes autonomous `codex exec` calls with JSON event output enabled a
 
 Token usage is accumulated across completed retries for the same task and summed across tasks for the mission total shown in the Desktop. If the Worker or Codex process is terminated before a usage event is returned, LoopGolem does not invent an estimate for that interrupted call.
 
+The SQLite persistence foundation additionally supports normalized agent sessions and turns. Per-turn records are designed to retain the model, reasoning effort, role/purpose, duration, input, cached input, cache-write input, output and reasoning-output usage independently from task aggregates. Session reuse is still disabled in the current execution path until the resumable Codex transport and lease policy are wired in.
+
 ## Future direction
 
 The integration can later move to Codex app-server or the official SDK for richer streaming, lifecycle control, quota telemetry and resumable sessions without changing mission semantics.
