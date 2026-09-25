@@ -1,19 +1,23 @@
 using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
+using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Infrastructure;
 
 namespace LoopGolem.Worker.Agents;
 
 public sealed class CodexPlanningService(
     ProcessRunner processRunner,
-    CodexCliService runtime)
+    CodexCliService runtime,
+    IMissionStore store)
 {
     private sealed record StructuredRunResult(
         ProcessRunResult Process,
         string FinalMessage,
         string Details,
-        TokenUsage? TokenUsage);
+        TokenUsage? TokenUsage,
+        string SessionId,
+        string? ThreadId);
 
     public const string PlannerModel = "gpt-6-luna";
     public const string PlannerReasoning = "high";
@@ -40,6 +44,7 @@ public sealed class CodexPlanningService(
 
     public async Task<TaskExecutionResult> PlanAsync(
         Mission mission,
+        MissionTask task,
         CancellationToken cancellationToken = default)
     {
         var status = await runtime.GetStatusAsync(cancellationToken);
@@ -62,7 +67,11 @@ public sealed class CodexPlanningService(
             cancellationToken);
 
         var run = await RunStructuredAsync(
-            mission.WorkspacePath,
+            mission,
+            task,
+            AgentSessionRole.Supervisor,
+            AgentTurnPurpose.Planning,
+            CodexSessionRequest.EphemeralFresh,
             PlannerModel,
             PlannerReasoning,
             "read-only",
@@ -190,7 +199,11 @@ public sealed class CodexPlanningService(
         }
 
         var run = await RunStructuredAsync(
-            mission.WorkspacePath,
+            mission,
+            task,
+            AgentSessionRole.Validator,
+            AgentTurnPurpose.Validation,
+            CodexSessionRequest.EphemeralFresh,
             PlannerModel,
             PlannerReasoning,
             "read-only",
@@ -346,7 +359,11 @@ public sealed class CodexPlanningService(
         }
 
         var run = await RunStructuredAsync(
-            mission.WorkspacePath,
+            mission,
+            task,
+            AgentSessionRole.Worker,
+            AgentTurnPurpose.Work,
+            CodexSessionRequest.EphemeralFresh,
             WorkerModel,
             WorkerReasoning,
             "workspace-write",
@@ -470,7 +487,11 @@ public sealed class CodexPlanningService(
 
     private async Task<StructuredRunResult>
         RunStructuredAsync(
-            string workspace,
+            Mission mission,
+            MissionTask task,
+            AgentSessionRole role,
+            AgentTurnPurpose purpose,
+            CodexSessionRequest sessionRequest,
             string model,
             string reasoning,
             string sandbox,
@@ -478,6 +499,36 @@ public sealed class CodexPlanningService(
             string prompt,
             CancellationToken cancellationToken)
     {
+        var session = await PrepareSessionAsync(
+            mission,
+            task,
+            role,
+            model,
+            reasoning,
+            sessionRequest,
+            cancellationToken);
+
+        var turnStarted = DateTimeOffset.UtcNow;
+        var turn = new AgentTurn(
+            Guid.NewGuid().ToString("N"),
+            mission.Id,
+            session.Id,
+            task.Id,
+            purpose,
+            checked(session.TurnCount + 1),
+            model,
+            reasoning,
+            null,
+            turnStarted,
+            null,
+            null,
+            null,
+            null);
+
+        await store.SaveAgentTurnAsync(
+            turn,
+            cancellationToken);
+
         var runtimeDirectory = Path.Combine(
             Path.GetTempPath(),
             "LoopGolem",
@@ -489,6 +540,55 @@ public sealed class CodexPlanningService(
         var schemaPath = Path.Combine(runtimeDirectory, "schema.json");
 
         await File.WriteAllTextAsync(schemaPath, schema, cancellationToken);
+
+        async Task ObserveStandardOutputLineAsync(string line)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+
+                if (TryGetThreadId(root, out var threadId))
+                {
+                    if (!string.IsNullOrWhiteSpace(session.ThreadId) &&
+                        !string.Equals(
+                            session.ThreadId,
+                            threadId,
+                            StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException(
+                            $"Codex reported thread '{threadId}' while LoopGolem expected '{session.ThreadId}'.");
+                    }
+
+                    session = session with
+                    {
+                        ThreadId = threadId,
+                        LastUsedAtUtc = DateTimeOffset.UtcNow
+                    };
+
+                    await store.SaveAgentSessionAsync(
+                        session,
+                        CancellationToken.None);
+                }
+
+                if (TryGetUsageElement(root, out var usage))
+                {
+                    turn = turn with
+                    {
+                        TokenUsage = ParseUsageElement(usage)
+                    };
+
+                    await store.SaveAgentTurnAsync(
+                        turn,
+                        CancellationToken.None);
+                }
+            }
+            catch (JsonException)
+            {
+                // Some launchers can interleave non-JSON diagnostics with
+                // Codex JSONL. They remain in the captured stdout.
+            }
+        }
 
         try
         {
@@ -503,7 +603,7 @@ public sealed class CodexPlanningService(
 
                 var wslWorkspace = await _wsl.ConvertWindowsPathAsync(
                     distribution,
-                    workspace,
+                    mission.WorkspacePath,
                     cancellationToken);
                 var wslOutput = await _wsl.ConvertWindowsPathAsync(
                     distribution,
@@ -514,7 +614,7 @@ public sealed class CodexPlanningService(
                     schemaPath,
                     cancellationToken);
 
-                process = await _wsl.RunLoginShellExecutableAsync(
+                process = await _wsl.RunLoginShellExecutableStreamingAsync(
                     distribution,
                     "codex",
                     BuildArguments(
@@ -523,24 +623,28 @@ public sealed class CodexPlanningService(
                         reasoning,
                         sandbox,
                         wslSchema,
-                        wslOutput),
+                        wslOutput,
+                        sessionRequest),
                     ExecutionTimeout,
+                    ObserveStandardOutputLineAsync,
                     cancellationToken,
                     prompt);
             }
             else
             {
-                process = await processRunner.RunAsync(
+                process = await processRunner.RunStreamingAsync(
                     "codex",
                     BuildArguments(
-                        workspace,
+                        mission.WorkspacePath,
                         model,
                         reasoning,
                         sandbox,
                         schemaPath,
-                        outputPath),
-                    workspace,
+                        outputPath,
+                        sessionRequest),
+                    mission.WorkspacePath,
                     ExecutionTimeout,
+                    ObserveStandardOutputLineAsync,
                     cancellationToken,
                     prompt);
             }
@@ -549,14 +653,87 @@ public sealed class CodexPlanningService(
                 ? await File.ReadAllTextAsync(outputPath, cancellationToken)
                 : string.Empty;
 
-            var tokenUsage = ParseTokenUsage(
-                process.StandardOutput);
+            var tokenUsage =
+                turn.TokenUsage ??
+                ParseTokenUsage(process.StandardOutput);
+
+            var finishedAt = DateTimeOffset.UtcNow;
+            var transportSucceeded =
+                !process.TimedOut &&
+                process.ExitCode == 0;
+
+            turn = turn with
+            {
+                TokenUsage = tokenUsage,
+                CompletedAtUtc = finishedAt,
+                DurationMilliseconds = process.DurationMilliseconds,
+                Success = transportSucceeded,
+                Error = transportSucceeded
+                    ? null
+                    : GetProcessError(process)
+            };
+
+            await store.SaveAgentTurnAsync(
+                turn,
+                CancellationToken.None);
+
+            var persistent =
+                sessionRequest.Mode !=
+                CodexSessionMode.EphemeralFresh;
+
+            if (persistent &&
+                string.IsNullOrWhiteSpace(session.ThreadId))
+            {
+                session = session with
+                {
+                    Status = AgentSessionStatus.Invalidated,
+                    LastUsedAtUtc = finishedAt,
+                    ClosedAtUtc = finishedAt,
+                    TerminationReason =
+                        "Codex did not emit a resumable thread id."
+                };
+
+                await store.SaveAgentSessionAsync(
+                    session,
+                    CancellationToken.None);
+
+                throw new InvalidDataException(
+                    "Codex did not emit thread.started for a persistent session.");
+            }
+
+            session = session with
+            {
+                Status = persistent
+                    ? AgentSessionStatus.Active
+                    : AgentSessionStatus.Closed,
+                TurnCount = checked(session.TurnCount + 1),
+                MicrotaskCount = checked(
+                    session.MicrotaskCount +
+                    (role == AgentSessionRole.Worker ? 1 : 0)),
+                ResumeCount = checked(
+                    session.ResumeCount +
+                    (sessionRequest.Mode == CodexSessionMode.Resume ? 1 : 0)),
+                LastUsedAtUtc = finishedAt,
+                ClosedAtUtc = persistent
+                    ? null
+                    : finishedAt,
+                TerminationReason = persistent
+                    ? session.TerminationReason
+                    : "ephemeral"
+            };
+
+            await store.SaveAgentSessionAsync(
+                session,
+                CancellationToken.None);
 
             var details = JsonSerializer.Serialize(new
             {
                 model,
                 reasoning,
                 sandbox,
+                sessionMode = sessionRequest.Mode.ToString(),
+                sessionId = session.Id,
+                threadId = session.ThreadId,
                 tokenUsage,
                 process
             });
@@ -565,7 +742,9 @@ public sealed class CodexPlanningService(
                 process,
                 finalMessage.Trim(),
                 details,
-                tokenUsage);
+                tokenUsage,
+                session.Id,
+                session.ThreadId);
         }
         finally
         {
@@ -579,21 +758,131 @@ public sealed class CodexPlanningService(
         }
     }
 
-    private static IReadOnlyList<string> BuildArguments(
+    private async Task<AgentSession> PrepareSessionAsync(
+        Mission mission,
+        MissionTask task,
+        AgentSessionRole role,
+        string model,
+        string reasoning,
+        CodexSessionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.Mode == CodexSessionMode.Resume)
+        {
+            if (string.IsNullOrWhiteSpace(request.SessionId) ||
+                string.IsNullOrWhiteSpace(request.ThreadId))
+            {
+                throw new InvalidOperationException(
+                    "A resumed Codex session requires both local session and thread ids.");
+            }
+
+            var sessions = await store.ListAgentSessionsAsync(
+                mission.Id,
+                cancellationToken);
+            var session = sessions.FirstOrDefault(
+                candidate =>
+                    string.Equals(
+                        candidate.Id,
+                        request.SessionId,
+                        StringComparison.Ordinal));
+
+            if (session is null ||
+                !session.Persistent ||
+                session.Status != AgentSessionStatus.Active ||
+                session.Role != role ||
+                !string.Equals(
+                    session.ThreadId,
+                    request.ThreadId,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    session.Model,
+                    model,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    session.ReasoningEffort,
+                    reasoning,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The requested Codex session cannot be resumed safely.");
+            }
+
+            return session;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var created = new AgentSession(
+            Guid.NewGuid().ToString("N"),
+            mission.Id,
+            role,
+            "codex",
+            null,
+            model,
+            reasoning,
+            request.Mode == CodexSessionMode.NewPersistent,
+            AgentSessionStatus.Active,
+            role == AgentSessionRole.Worker
+                ? task.Id
+                : null,
+            0,
+            0,
+            0,
+            now,
+            now,
+            null,
+            null);
+
+        await store.SaveAgentSessionAsync(
+            created,
+            cancellationToken);
+
+        return created;
+    }
+
+    internal static IReadOnlyList<string> BuildArguments(
         string workspace,
         string model,
         string reasoning,
         string sandbox,
         string schemaPath,
-        string outputPath) =>
+        string outputPath,
+        CodexSessionRequest sessionRequest)
+    {
+        var arguments = new List<string>
+        {
+            "exec"
+        };
+
+        if (sessionRequest.Mode == CodexSessionMode.Resume)
+        {
+            if (string.IsNullOrWhiteSpace(sessionRequest.ThreadId))
+            {
+                throw new ArgumentException(
+                    "Resume requires a Codex thread id.",
+                    nameof(sessionRequest));
+            }
+
+            arguments.Add("resume");
+            arguments.Add(sessionRequest.ThreadId);
+        }
+
+        arguments.AddRange(
         [
-            "exec",
-            "--json",
-            "--ephemeral",
+            "--json"
+        ]);
+
+        if (sessionRequest.Mode == CodexSessionMode.EphemeralFresh)
+        {
+            arguments.Add("--ephemeral");
+        }
+
+        arguments.AddRange(
+        [
             "--ignore-user-config",
             "--disable", "apps",
             "--disable", "plugins",
             "--disable", "multi_agent",
+            "--disable", "memories",
             "--color", "never",
             "--sandbox", sandbox,
             "--cd", workspace,
@@ -604,7 +893,32 @@ public sealed class CodexPlanningService(
             "--output-schema", schemaPath,
             "--output-last-message", outputPath,
             "-"
-        ];
+        ]);
+
+        return arguments;
+    }
+
+    private static bool TryGetThreadId(
+        JsonElement root,
+        out string threadId)
+    {
+        if (root.TryGetProperty("type", out var type) &&
+            type.ValueKind == JsonValueKind.String &&
+            string.Equals(
+                type.GetString(),
+                "thread.started",
+                StringComparison.Ordinal) &&
+            root.TryGetProperty("thread_id", out var id) &&
+            id.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(id.GetString()))
+        {
+            threadId = id.GetString()!;
+            return true;
+        }
+
+        threadId = string.Empty;
+        return false;
+    }
 
     internal static TokenUsage? ParseTokenUsage(
         string jsonLines)
