@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Orchestrator;
+using LoopGolem.Worker.Agents;
 using LoopGolem.Worker.Execution;
 using LoopGolem.Worker.Infrastructure;
 using DomainTaskStatus = LoopGolem.Core.Domain.TaskStatus;
@@ -117,6 +118,14 @@ internal static class SelfTest
                             30))
                 ],
                 ["dotnet build Demo.csproj"]);
+
+            if (!VerifySelfHostingPrompts(
+                    workspace,
+                    baseCommit,
+                    fakePlan))
+            {
+                return 1;
+            }
 
             IMissionTaskExecutor[] executors =
             [
@@ -372,6 +381,50 @@ internal static class SelfTest
         {
             File.Delete(probePath);
         }
+    }
+
+    private static bool VerifySelfHostingPrompts(
+        string workspace,
+        string baseCommit,
+        MissionPlan plan)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var mission = new Mission(
+            "self-hosting-prompt-test",
+            "Modify LoopGolem.Worker safely.",
+            workspace,
+            MissionExecutionMode.Codex,
+            MissionStatus.Running,
+            null,
+            null,
+            now,
+            now);
+
+        var plannerPrompt =
+            CodexPlanningService.BuildPlannerPrompt(mission);
+        var validatorPrompt =
+            CodexPlanningService.BuildValidatorPrompt(
+                mission,
+                new ValidatorContext(
+                    baseCommit,
+                    plan,
+                    [],
+                    1),
+                "self-test-snapshot");
+
+        if (!plannerPrompt.Contains(
+                CodexPlanningService.SelfHostingRule,
+                StringComparison.Ordinal) ||
+            !validatorPrompt.Contains(
+                CodexPlanningService.SelfHostingRule,
+                StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "Self-test self-hosting policy is missing from a Codex prompt.");
+            return false;
+        }
+
+        return true;
     }
 
     private static async Task<bool>
