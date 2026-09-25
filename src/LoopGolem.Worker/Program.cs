@@ -15,7 +15,16 @@ await store.InitializeAsync();
 
 var processRunner = new ProcessRunner();
 var codex = new CodexCliService(processRunner);
-var planning = new CodexPlanningService(processRunner, codex);
+var codexTransport =
+    new CodexSessionTransport(
+        processRunner,
+        codex,
+        store);
+var planning =
+    new CodexPlanningService(
+        processRunner,
+        codex,
+        codexTransport);
 
 IMissionTaskExecutor[] executors =
 [
