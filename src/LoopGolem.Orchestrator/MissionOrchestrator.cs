@@ -341,7 +341,8 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                             result.Error ??
                             result.Summary,
                         EvidenceJson = result.Details,
-                        CompletedAtUtc = finishedAt
+                        CompletedAtUtc = finishedAt,
+                        FailureKind = result.FailureKind
                     };
 
                     await _store.UpsertTaskAttemptAsync(
