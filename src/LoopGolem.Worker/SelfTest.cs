@@ -97,8 +97,7 @@ internal static class SelfTest
             }
 
             if (!await VerifyGitChangeCountingAsync(
-                    processRunner,
-                    workspace))
+                    processRunner))
             {
                 return 1;
             }
@@ -328,25 +327,40 @@ internal static class SelfTest
     }
 
     private static async Task<bool> VerifyGitChangeCountingAsync(
-        ProcessRunner processRunner,
-        string workspace)
+        ProcessRunner processRunner)
     {
-        var firstPath = Path.Combine(
-            workspace,
-            "git-count-first.txt");
-        var secondPath = Path.Combine(
-            workspace,
-            "git-count-second.txt");
+        var workspace = Path.Combine(
+            Path.GetTempPath(),
+            $"loopgolem-git-count-{Guid.NewGuid():N}");
 
-        await File.WriteAllTextAsync(
-            firstPath,
-            "first");
-        await File.WriteAllTextAsync(
-            secondPath,
-            "second");
+        Directory.CreateDirectory(workspace);
 
         try
         {
+            await File.WriteAllTextAsync(
+                Path.Combine(workspace, "baseline.txt"),
+                "baseline");
+
+            if (!await InitializeGitAsync(
+                    processRunner,
+                    workspace))
+            {
+                Console.Error.WriteLine(
+                    "Self-test could not initialize isolated Git counting workspace.");
+                return false;
+            }
+
+            await File.WriteAllTextAsync(
+                Path.Combine(
+                    workspace,
+                    "git-count-first.txt"),
+                "first");
+            await File.WriteAllTextAsync(
+                Path.Combine(
+                    workspace,
+                    "git-count-second.txt"),
+                "second");
+
             var now = DateTimeOffset.UtcNow;
             var mission = new Mission(
                 "git-counting",
@@ -391,8 +405,15 @@ internal static class SelfTest
         }
         finally
         {
-            File.Delete(firstPath);
-            File.Delete(secondPath);
+            try
+            {
+                Directory.Delete(
+                    workspace,
+                    recursive: true);
+            }
+            catch
+            {
+            }
         }
     }
 
