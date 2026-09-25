@@ -11,3 +11,14 @@ public interface IMissionTaskExecutor
         MissionTask task,
         CancellationToken cancellationToken = default);
 }
+
+
+public interface IMissionTaskExecutionContextProvider
+{
+    bool RequiresExecutionContext(MissionTask task);
+
+    Task<string> CreateExecutionContextAsync(
+        Mission mission,
+        MissionTask task,
+        CancellationToken cancellationToken = default);
+}
