@@ -192,6 +192,81 @@ internal static class SelfTest
                 return 1;
             }
 
+            created = created with
+            {
+                Mission = created.Mission with
+                {
+                    Policy = new MissionPolicy(
+                        MaxRecoveryCycles: 4,
+                        MaxValidationCycles: 5,
+                        SessionReuse: SessionReuseMode.Affinity)
+                }
+            };
+            await store.UpdateAsync(created);
+
+            var telemetryTask = created.Tasks[0];
+            var telemetryNow = DateTimeOffset.UtcNow;
+            var attempt = new MissionTaskAttempt(
+                $"attempt-{created.Mission.Id}",
+                created.Mission.Id,
+                telemetryTask.Id,
+                1,
+                MissionTaskAttemptOutcome.Succeeded,
+                "Telemetry persistence probe.",
+                null,
+                "{\"exitCode\":0}",
+                telemetryNow,
+                telemetryNow.AddMilliseconds(25));
+            var session = new AgentSession(
+                $"session-{created.Mission.Id}",
+                created.Mission.Id,
+                AgentSessionRole.Supervisor,
+                "gpt-6-luna",
+                "high",
+                "self-test-thread",
+                AgentSessionStatus.Active,
+                null,
+                1,
+                0,
+                null,
+                telemetryNow,
+                telemetryNow,
+                telemetryNow);
+            var turn = new AgentTurn(
+                $"turn-{created.Mission.Id}",
+                created.Mission.Id,
+                telemetryTask.Id,
+                session.Id,
+                AgentTurnPurpose.Planning,
+                "gpt-6-luna",
+                "high",
+                1,
+                telemetryNow,
+                telemetryNow.AddMilliseconds(20),
+                20,
+                100,
+                40,
+                7,
+                20,
+                5,
+                120);
+            var recoveryCycle = new RecoveryCycle(
+                $"recovery-{created.Mission.Id}",
+                created.Mission.Id,
+                telemetryTask.Id,
+                1,
+                RecoveryCycleStatus.Pending,
+                attempt.Id,
+                turn.Id,
+                [telemetryTask.Id],
+                telemetryNow,
+                telemetryNow);
+
+            await store.UpsertTaskAttemptAsync(attempt);
+            await store.UpsertAgentSessionAsync(session);
+            await store.UpsertAgentTurnAsync(turn);
+            await store.UpsertRecoveryCycleAsync(recoveryCycle);
+
             var completed = await orchestrator.RunMissionAsync(
                 created.Mission.Id);
 
@@ -244,8 +319,21 @@ internal static class SelfTest
 
             var persisted = await reopened.GetAsync(
                 created.Mission.Id);
+            var persistedAttempts =
+                await reopened.ListTaskAttemptsAsync(
+                    created.Mission.Id);
+            var persistedSessions =
+                await reopened.ListAgentSessionsAsync(
+                    created.Mission.Id);
+            var persistedTurns =
+                await reopened.ListAgentTurnsAsync(
+                    created.Mission.Id);
+            var persistedRecoveryCycles =
+                await reopened.ListRecoveryCyclesAsync(
+                    created.Mission.Id);
 
             if (persisted is null ||
+                persisted.Mission.Policy != created.Mission.Policy ||
                 persisted.Tasks.Count != 12 ||
                 persisted.Tasks.Count(
                     task =>
@@ -258,6 +346,30 @@ internal static class SelfTest
             {
                 Console.Error.WriteLine(
                     "Self-test did not persist expanded validator plan metadata.");
+                return 1;
+            }
+
+            if (persistedAttempts.Count != 1 ||
+                persistedAttempts[0] != attempt ||
+                persistedSessions.Count != 1 ||
+                persistedSessions[0] != session ||
+                persistedTurns.Count != 1 ||
+                persistedTurns[0] != turn ||
+                persistedRecoveryCycles.Count != 1 ||
+                persistedRecoveryCycles[0].Id != recoveryCycle.Id ||
+                persistedRecoveryCycles[0].MissionId != recoveryCycle.MissionId ||
+                persistedRecoveryCycles[0].FailedTaskId != recoveryCycle.FailedTaskId ||
+                persistedRecoveryCycles[0].CycleNumber != recoveryCycle.CycleNumber ||
+                persistedRecoveryCycles[0].Status != recoveryCycle.Status ||
+                persistedRecoveryCycles[0].FailureAttemptId != recoveryCycle.FailureAttemptId ||
+                persistedRecoveryCycles[0].RecoveryTurnId != recoveryCycle.RecoveryTurnId ||
+                persistedRecoveryCycles[0].CreatedAtUtc != recoveryCycle.CreatedAtUtc ||
+                persistedRecoveryCycles[0].UpdatedAtUtc != recoveryCycle.UpdatedAtUtc ||
+                !persistedRecoveryCycles[0].RepairTaskIds.SequenceEqual(
+                    recoveryCycle.RepairTaskIds))
+            {
+                Console.Error.WriteLine(
+                    "Self-test did not round-trip orchestration telemetry.");
                 return 1;
             }
 
@@ -336,7 +448,7 @@ internal static class SelfTest
     private static bool VerifyTokenUsageParsing()
     {
         const string modernJson =
-            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"cache_write_input_tokens\":7,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
 
         var usage = CodexPlanningService.ParseTokenUsage(
             modernJson);
@@ -344,6 +456,7 @@ internal static class SelfTest
         if (usage is null ||
             usage.InputTokens != 100 ||
             usage.CachedInputTokens != 40 ||
+            usage.CacheWriteInputTokens != 7 ||
             usage.OutputTokens != 20 ||
             usage.ReasoningOutputTokens != 5 ||
             usage.TotalTokens != 120)

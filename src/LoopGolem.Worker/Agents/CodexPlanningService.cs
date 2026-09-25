@@ -718,6 +718,9 @@ public sealed class CodexPlanningService(
         var cachedInput = GetTokenCount(
             usage,
             "cached_input_tokens");
+        var cacheWriteInput = GetTokenCount(
+            usage,
+            "cache_write_input_tokens");
         var output = GetTokenCount(
             usage,
             "output_tokens");
@@ -738,7 +741,10 @@ public sealed class CodexPlanningService(
             cachedInput,
             output,
             reasoningOutput,
-            total);
+            total)
+        {
+            CacheWriteInputTokens = cacheWriteInput
+        };
     }
 
     private static long GetTokenCount(
