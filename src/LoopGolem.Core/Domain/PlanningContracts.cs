@@ -36,7 +36,10 @@ public sealed record PlannedTask(
     IReadOnlyList<string> WriteFiles,
     IReadOnlyList<string> AcceptanceChecks,
     IReadOnlyList<string> DependsOn,
-    DeterministicOperation Deterministic);
+    DeterministicOperation Deterministic)
+{
+    public bool RerunAfterRepair { get; init; }
+}
 
 public sealed record MissionPlan(
     string Summary,
@@ -118,6 +121,12 @@ public static class MissionPlanValidator
                 string.IsNullOrWhiteSpace(task.Prompt))
             {
                 return $"Luna Low task '{task.Id}' has an empty prompt.";
+            }
+
+            if (task.RerunAfterRepair &&
+                task.Executor != PlannedExecutorKinds.Deterministic)
+            {
+                return $"Task '{task.Id}' may set rerunAfterRepair only for deterministic work.";
             }
 
             var deterministicError = ValidateDeterministic(task);
