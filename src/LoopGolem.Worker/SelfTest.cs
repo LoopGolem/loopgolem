@@ -200,6 +200,7 @@ internal static class SelfTest
 
             if (!await VerifyExecutionTelemetryPersistenceAsync(
                     store,
+                    database,
                     created))
             {
                 return 1;
@@ -391,6 +392,7 @@ internal static class SelfTest
 
     private static async Task<bool> VerifyExecutionTelemetryPersistenceAsync(
         SqliteMissionStore store,
+        string database,
         MissionSnapshot snapshot)
     {
         var plannerTask = snapshot.Tasks.First(
@@ -475,13 +477,14 @@ internal static class SelfTest
             now);
         await store.SaveRecoveryEpisodeAsync(episode);
 
-        // Read through the store now; the main self-test reopens the same
-        // database later and verifies that expanded mission state also survives.
-        var persistedMission = await store.GetAsync(missionId);
-        var attempts = await store.ListTaskAttemptsAsync(missionId);
-        var sessions = await store.ListAgentSessionsAsync(missionId);
-        var turns = await store.ListAgentTurnsAsync(missionId);
-        var episodes = await store.ListRecoveryEpisodesAsync(missionId);
+        var reopened = new SqliteMissionStore(database);
+        await reopened.InitializeAsync();
+
+        var persistedMission = await reopened.GetAsync(missionId);
+        var attempts = await reopened.ListTaskAttemptsAsync(missionId);
+        var sessions = await reopened.ListAgentSessionsAsync(missionId);
+        var turns = await reopened.ListAgentTurnsAsync(missionId);
+        var episodes = await reopened.ListRecoveryEpisodesAsync(missionId);
 
         if (persistedMission?.Mission.Policy != configured.Mission.Policy ||
             attempts.Count != 1 ||
