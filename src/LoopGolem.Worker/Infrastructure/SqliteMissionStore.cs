@@ -87,10 +87,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     thread_id TEXT NULL,
                     model TEXT NOT NULL,
                     reasoning_effort TEXT NOT NULL,
+                    persistent INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
                     lease_task_id TEXT NULL,
                     turn_count INTEGER NOT NULL DEFAULT 0,
                     microtask_count INTEGER NOT NULL DEFAULT 0,
+                    resume_count INTEGER NOT NULL DEFAULT 0,
                     created_utc TEXT NOT NULL,
                     last_used_utc TEXT NOT NULL,
                     closed_utc TEXT NULL,
@@ -423,12 +425,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.CommandText = """
             INSERT INTO agent_sessions (
                 id, mission_id, role, provider, thread_id, model, reasoning_effort,
-                status, lease_task_id, turn_count, microtask_count, created_utc,
-                last_used_utc, closed_utc, termination_reason)
+                persistent, status, lease_task_id, turn_count, microtask_count,
+                resume_count, created_utc, last_used_utc, closed_utc, termination_reason)
             VALUES (
                 $id, $missionId, $role, $provider, $threadId, $model, $reasoningEffort,
-                $status, $leaseTaskId, $turnCount, $microtaskCount, $createdUtc,
-                $lastUsedUtc, $closedUtc, $terminationReason)
+                $persistent, $status, $leaseTaskId, $turnCount, $microtaskCount,
+                $resumeCount, $createdUtc, $lastUsedUtc, $closedUtc, $terminationReason)
             ON CONFLICT(id) DO UPDATE SET
                 mission_id = excluded.mission_id,
                 role = excluded.role,
@@ -436,10 +438,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 thread_id = excluded.thread_id,
                 model = excluded.model,
                 reasoning_effort = excluded.reasoning_effort,
+                persistent = excluded.persistent,
                 status = excluded.status,
                 lease_task_id = excluded.lease_task_id,
                 turn_count = excluded.turn_count,
                 microtask_count = excluded.microtask_count,
+                resume_count = excluded.resume_count,
                 created_utc = excluded.created_utc,
                 last_used_utc = excluded.last_used_utc,
                 closed_utc = excluded.closed_utc,
@@ -453,10 +457,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Parameters.AddWithValue("$threadId", (object?)session.ThreadId ?? DBNull.Value);
         command.Parameters.AddWithValue("$model", session.Model);
         command.Parameters.AddWithValue("$reasoningEffort", session.ReasoningEffort);
+        command.Parameters.AddWithValue("$persistent", session.Persistent ? 1 : 0);
         command.Parameters.AddWithValue("$status", session.Status.ToString());
         command.Parameters.AddWithValue("$leaseTaskId", (object?)session.LeaseTaskId ?? DBNull.Value);
         command.Parameters.AddWithValue("$turnCount", session.TurnCount);
         command.Parameters.AddWithValue("$microtaskCount", session.MicrotaskCount);
+        command.Parameters.AddWithValue("$resumeCount", session.ResumeCount);
         command.Parameters.AddWithValue("$createdUtc", FormatTimestamp(session.CreatedAtUtc));
         command.Parameters.AddWithValue("$lastUsedUtc", FormatTimestamp(session.LastUsedAtUtc));
         command.Parameters.AddWithValue(
@@ -479,8 +485,8 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, mission_id, role, provider, thread_id, model, reasoning_effort,
-                   status, lease_task_id, turn_count, microtask_count, created_utc,
-                   last_used_utc, closed_utc, termination_reason
+                   persistent, status, lease_task_id, turn_count, microtask_count,
+                   resume_count, created_utc, last_used_utc, closed_utc, termination_reason
             FROM agent_sessions
             WHERE mission_id = $missionId
             ORDER BY created_utc, id;
@@ -499,16 +505,18 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 reader.GetString(5),
                 reader.GetString(6),
-                Enum.Parse<AgentSessionStatus>(reader.GetString(7)),
-                reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.GetInt32(9),
+                reader.GetInt64(7) != 0,
+                Enum.Parse<AgentSessionStatus>(reader.GetString(8)),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
                 reader.GetInt32(10),
-                ParseTimestamp(reader.GetString(11)),
-                ParseTimestamp(reader.GetString(12)),
-                reader.IsDBNull(13)
+                reader.GetInt32(11),
+                reader.GetInt32(12),
+                ParseTimestamp(reader.GetString(13)),
+                ParseTimestamp(reader.GetString(14)),
+                reader.IsDBNull(15)
                     ? null
-                    : ParseTimestamp(reader.GetString(13)),
-                reader.IsDBNull(14) ? null : reader.GetString(14)));
+                    : ParseTimestamp(reader.GetString(15)),
+                reader.IsDBNull(16) ? null : reader.GetString(16)));
         }
 
         return sessions;
