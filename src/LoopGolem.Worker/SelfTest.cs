@@ -96,6 +96,13 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyGitChangeCountingAsync(
+                    processRunner,
+                    workspace))
+            {
+                return 1;
+            }
+
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
@@ -318,6 +325,75 @@ internal static class SelfTest
         return run.ExitCode == 0 && !run.TimedOut
             ? run.StandardOutput.Trim()
             : null;
+    }
+
+    private static async Task<bool> VerifyGitChangeCountingAsync(
+        ProcessRunner processRunner,
+        string workspace)
+    {
+        var firstPath = Path.Combine(
+            workspace,
+            "git-count-first.txt");
+        var secondPath = Path.Combine(
+            workspace,
+            "git-count-second.txt");
+
+        await File.WriteAllTextAsync(
+            firstPath,
+            "first");
+        await File.WriteAllTextAsync(
+            secondPath,
+            "second");
+
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var mission = new Mission(
+                "git-counting",
+                "Verify changed-path counting.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now);
+            var task = new MissionTask(
+                "git-counting",
+                mission.Id,
+                1,
+                MissionTaskKind.InspectGitChanges,
+                "Inspect Git changes",
+                null,
+                DomainTaskStatus.Running,
+                null,
+                null,
+                null,
+                now,
+                now);
+
+            var result =
+                await new GitChangesExecutor(
+                    processRunner).ExecuteAsync(
+                    mission,
+                    task);
+
+            if (!result.Success ||
+                result.Summary !=
+                    "Git reports 2 changed path(s).")
+            {
+                Console.Error.WriteLine(
+                    $"Self-test Git changed-path count is invalid: {result.Summary}");
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            File.Delete(firstPath);
+            File.Delete(secondPath);
+        }
     }
 
     private static async Task<bool> VerifyGitSnapshotAsync(
