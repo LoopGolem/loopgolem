@@ -57,4 +57,6 @@
   <data name="CodexCliMissingWsl" xml:space="preserve"><value>Installa Codex in WSL</value></data>
   <data name="CodexAuthRequiredWsl" xml:space="preserve"><value>Accesso ChatGPT richiesto in WSL</value></data>
   <data name="CodexAuthRequired" xml:space="preserve"><value>Accesso ChatGPT richiesto</value></data>
+  <data name="Tokens" xml:space="preserve"><value>token</value></data>
+  <data name="TotalTokens" xml:space="preserve"><value>Token totali</value></data>
 </root>
