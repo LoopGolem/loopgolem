@@ -261,10 +261,15 @@ public sealed class CodexSupervisorSessionService(
                             task.Result,
                             task.Error,
                             task.Definition
-                        }),
-                    capabilities
+                        })
                 },
                 JsonOptions);
+
+        var capabilityContext =
+            capabilities is null
+                ? "No persisted capability snapshot is available."
+                : EnvironmentCapabilityService.FormatForPrompt(
+                    capabilities);
 
         return $"""
             SUPERVISOR SESSION RESET
@@ -274,6 +279,9 @@ public sealed class CodexSupervisorSessionService(
             Treat this persisted state as authoritative for orchestration state.
             Re-inspect repository files when implementation details are needed.
             Do not assume any unfinished prior reasoning survived the reset.
+
+            PERSISTED EXECUTION CAPABILITIES:
+            {capabilityContext}
 
             PERSISTED LOOPGOLEM STATE:
             {persistedState}
