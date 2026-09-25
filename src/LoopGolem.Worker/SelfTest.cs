@@ -356,10 +356,15 @@ internal static class SelfTest
                 persistedTurns.Count != 1 ||
                 persistedTurns[0] != turn ||
                 persistedRecoveryCycles.Count != 1 ||
-                persistedRecoveryCycles[0] with
-                {
-                    RepairTaskIds = recoveryCycle.RepairTaskIds
-                } != recoveryCycle ||
+                persistedRecoveryCycles[0].Id != recoveryCycle.Id ||
+                persistedRecoveryCycles[0].MissionId != recoveryCycle.MissionId ||
+                persistedRecoveryCycles[0].FailedTaskId != recoveryCycle.FailedTaskId ||
+                persistedRecoveryCycles[0].CycleNumber != recoveryCycle.CycleNumber ||
+                persistedRecoveryCycles[0].Status != recoveryCycle.Status ||
+                persistedRecoveryCycles[0].FailureAttemptId != recoveryCycle.FailureAttemptId ||
+                persistedRecoveryCycles[0].RecoveryTurnId != recoveryCycle.RecoveryTurnId ||
+                persistedRecoveryCycles[0].CreatedAtUtc != recoveryCycle.CreatedAtUtc ||
+                persistedRecoveryCycles[0].UpdatedAtUtc != recoveryCycle.UpdatedAtUtc ||
                 !persistedRecoveryCycles[0].RepairTaskIds.SequenceEqual(
                     recoveryCycle.RepairTaskIds))
             {
