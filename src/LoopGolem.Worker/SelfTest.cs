@@ -134,6 +134,24 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyAutomaticDeterministicRecoveryAsync(
+                    root))
+            {
+                return 1;
+            }
+
+            if (!await VerifyRecoveryExhaustionAsync(
+                    root))
+            {
+                return 1;
+            }
+
+            if (!await VerifyRecoveryRestartAsync(
+                    root))
+            {
+                return 1;
+            }
+
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
@@ -1106,6 +1124,380 @@ internal static class SelfTest
         return true;
     }
 
+    private static async Task<bool>
+        VerifyAutomaticDeterministicRecoveryAsync(
+            string root)
+    {
+        var workspace = Path.Combine(
+            root,
+            "recovery-success-workspace");
+        var database = Path.Combine(
+            root,
+            "state",
+            "recovery-success.db");
+        Directory.CreateDirectory(workspace);
+
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var snapshot =
+            CreateRecoveryTestSnapshot(
+                workspace,
+                maxRecoveryCycles: 3);
+        await store.CreateAsync(snapshot);
+
+        var check =
+            new RecoveryCheckExecutor(
+                alwaysFail: false);
+        var repair =
+            new RecoveryRepairExecutor();
+        var planner =
+            new FakeRecoveryPlanner();
+
+        var orchestrator =
+            new MissionOrchestrator(
+                store,
+                [check, repair],
+                planner);
+
+        var completed =
+            await orchestrator.RunMissionAsync(
+                snapshot.Mission.Id);
+
+        if (completed?.Mission.Status !=
+                MissionStatus.Completed ||
+            check.Calls != 2 ||
+            planner.Calls != 1 ||
+            check.Definitions.Count != 2 ||
+            check.Definitions[0] !=
+                check.Definitions[1])
+        {
+            Console.Error.WriteLine(
+                "Self-test deterministic recovery did not repair and rerun the exact original check.");
+            return false;
+        }
+
+        var originalTaskId =
+            snapshot.Tasks.Single().Id;
+        var attempts =
+            await store.ListTaskAttemptsAsync(
+                snapshot.Mission.Id);
+        var checkAttempts =
+            attempts
+                .Where(attempt =>
+                    attempt.TaskId ==
+                    originalTaskId)
+                .OrderBy(attempt =>
+                    attempt.AttemptNumber)
+                .ToArray();
+        var cycles =
+            await store.ListRecoveryCyclesAsync(
+                snapshot.Mission.Id);
+
+        if (checkAttempts.Length != 2 ||
+            checkAttempts[0].Outcome !=
+                MissionTaskAttemptOutcome.Failed ||
+            checkAttempts[1].Outcome !=
+                MissionTaskAttemptOutcome.Succeeded ||
+            cycles.Count != 1 ||
+            cycles[0].Status !=
+                RecoveryCycleStatus.Succeeded ||
+            string.IsNullOrWhiteSpace(
+                cycles[0].FailureAttemptId) ||
+            cycles[0].RepairTaskIds.Count != 1)
+        {
+            Console.Error.WriteLine(
+                "Self-test deterministic recovery telemetry/state did not round-trip.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
+        VerifyRecoveryExhaustionAsync(
+            string root)
+    {
+        var workspace = Path.Combine(
+            root,
+            "recovery-exhaustion-workspace");
+        var database = Path.Combine(
+            root,
+            "state",
+            "recovery-exhaustion.db");
+        Directory.CreateDirectory(workspace);
+
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var snapshot =
+            CreateRecoveryTestSnapshot(
+                workspace,
+                maxRecoveryCycles: 2);
+        await store.CreateAsync(snapshot);
+
+        var check =
+            new RecoveryCheckExecutor(
+                alwaysFail: true);
+        var repair =
+            new RecoveryRepairExecutor();
+        var planner =
+            new FakeRecoveryPlanner();
+
+        var orchestrator =
+            new MissionOrchestrator(
+                store,
+                [check, repair],
+                planner);
+
+        var result =
+            await orchestrator.RunMissionAsync(
+                snapshot.Mission.Id);
+        var cycles =
+            await store.ListRecoveryCyclesAsync(
+                snapshot.Mission.Id);
+        var original =
+            result?.Tasks.SingleOrDefault(
+                task =>
+                    task.Id ==
+                    snapshot.Tasks.Single().Id);
+
+        if (result?.Mission.Status !=
+                MissionStatus.NeedsHumanAttention ||
+            original?.Status !=
+                DomainTaskStatus.Escalated ||
+            check.Calls != 3 ||
+            planner.Calls != 2 ||
+            cycles.Count != 2 ||
+            cycles[0].Status !=
+                RecoveryCycleStatus.Failed ||
+            cycles[1].Status !=
+                RecoveryCycleStatus.Exhausted)
+        {
+            Console.Error.WriteLine(
+                "Self-test deterministic recovery did not stop at the configured cycle limit.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
+        VerifyRecoveryRestartAsync(
+            string root)
+    {
+        var workspace = Path.Combine(
+            root,
+            "recovery-restart-workspace");
+        var database = Path.Combine(
+            root,
+            "state",
+            "recovery-restart.db");
+        Directory.CreateDirectory(workspace);
+
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var snapshot =
+            CreateRecoveryTestSnapshot(
+                workspace,
+                maxRecoveryCycles: 3);
+        await store.CreateAsync(snapshot);
+
+        using var interruption =
+            new CancellationTokenSource();
+        var check =
+            new RecoveryCheckExecutor(
+                alwaysFail: false);
+        var interruptingRepair =
+            new InterruptingRecoveryRepairExecutor(
+                interruption);
+        var planner =
+            new FakeRecoveryPlanner();
+        var firstOrchestrator =
+            new MissionOrchestrator(
+                store,
+                [check, interruptingRepair],
+                planner);
+
+        try
+        {
+            await firstOrchestrator.RunMissionAsync(
+                snapshot.Mission.Id,
+                interruption.Token);
+            Console.Error.WriteLine(
+                "Self-test recovery restart did not interrupt during a repair task.");
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        var persisted =
+            await store.GetAsync(
+                snapshot.Mission.Id);
+        var persistedCycles =
+            await store.ListRecoveryCyclesAsync(
+                snapshot.Mission.Id);
+        var persistedRepair =
+            persisted?.Tasks.FirstOrDefault(
+                task =>
+                    task.Kind ==
+                        MissionTaskKind.AgentWork);
+        var persistedAttempts =
+            await store.ListTaskAttemptsAsync(
+                snapshot.Mission.Id);
+
+        if (persisted is null ||
+            persisted.Mission.Status !=
+                MissionStatus.Running ||
+            persisted.Tasks.Single(
+                task =>
+                    task.Id ==
+                    snapshot.Tasks.Single().Id)
+                .Status !=
+                DomainTaskStatus.RecoveryPending ||
+            persistedRepair?.Status !=
+                DomainTaskStatus.Running ||
+            persistedCycles.Count != 1 ||
+            persistedCycles[0].Status !=
+                RecoveryCycleStatus.Repairing ||
+            !persistedAttempts.Any(
+                attempt =>
+                    attempt.TaskId ==
+                        persistedRepair.Id &&
+                    attempt.Outcome ==
+                        MissionTaskAttemptOutcome.Interrupted))
+        {
+            Console.Error.WriteLine(
+                "Self-test recovery restart did not persist the in-flight repair state.");
+            return false;
+        }
+
+        var reopened =
+            new SqliteMissionStore(database);
+        await reopened.InitializeAsync();
+
+        var resumedCheck =
+            new RecoveryCheckExecutor(
+                alwaysFail: false);
+        var resumedRepair =
+            new RecoveryRepairExecutor();
+        var noReplan =
+            new FailIfCalledRecoveryPlanner();
+        var restartedOrchestrator =
+            new MissionOrchestrator(
+                reopened,
+                [resumedCheck, resumedRepair],
+                noReplan);
+
+        var completed =
+            await restartedOrchestrator.RunMissionAsync(
+                snapshot.Mission.Id);
+        var finalCycles =
+            await reopened.ListRecoveryCyclesAsync(
+                snapshot.Mission.Id);
+        var finalAttempts =
+            await reopened.ListTaskAttemptsAsync(
+                snapshot.Mission.Id);
+
+        if (completed?.Mission.Status !=
+                MissionStatus.Completed ||
+            noReplan.Calls != 0 ||
+            resumedCheck.Calls != 1 ||
+            finalCycles.Count != 1 ||
+            finalCycles[0].Status !=
+                RecoveryCycleStatus.Succeeded ||
+            finalAttempts.Count(
+                attempt =>
+                    attempt.TaskId ==
+                        persistedRepair.Id) != 2 ||
+            !finalAttempts.Any(
+                attempt =>
+                    attempt.TaskId ==
+                        persistedRepair.Id &&
+                    attempt.AttemptNumber == 2 &&
+                    attempt.Outcome ==
+                        MissionTaskAttemptOutcome.Succeeded))
+        {
+            Console.Error.WriteLine(
+                "Self-test recovery did not resume persisted repairs and finish the exact recheck after restart.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static MissionSnapshot
+        CreateRecoveryTestSnapshot(
+            string workspace,
+            int maxRecoveryCycles)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var missionId =
+            $"recovery-{Guid.NewGuid():N}";
+        var mission =
+            new Mission(
+                missionId,
+                "Repair a deterministic check without weakening it.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now)
+            {
+                Policy =
+                    MissionPolicy.Default with
+                    {
+                        MaxRecoveryCycles =
+                            maxRecoveryCycles
+                    }
+            };
+        var definition =
+            new PlannedTask(
+                "exact-recovery-check",
+                "Run exact recovery check",
+                PlannedExecutorKinds.Deterministic,
+                string.Empty,
+                [],
+                [],
+                [],
+                [],
+                new DeterministicOperation(
+                    DeterministicOperationKinds.RunCommand,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    "dotnet",
+                    ["build"],
+                    ".",
+                    30));
+        var task =
+            new MissionTask(
+                Guid.NewGuid().ToString("N"),
+                missionId,
+                1,
+                MissionTaskKind.DeterministicWork,
+                definition.Title,
+                definition,
+                DomainTaskStatus.Ready,
+                null,
+                null,
+                null,
+                now,
+                now);
+
+        return new MissionSnapshot(
+            mission,
+            [task]);
+    }
+
     private static async Task<bool> VerifyGitChangeCountingAsync(
         ProcessRunner processRunner)
     {
@@ -1928,6 +2320,207 @@ internal static class SelfTest
         return executor.ExecuteAsync(
             mission,
             task);
+    }
+
+    private sealed class RecoveryCheckExecutor(
+        bool alwaysFail) :
+        IMissionTaskExecutor
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.DeterministicWork;
+
+        public int Calls { get; private set; }
+
+        public List<string> Definitions { get; } =
+            [];
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            Definitions.Add(
+                JsonSerializer.Serialize(
+                    task.Definition,
+                    JsonOptions));
+
+            var marker =
+                Path.Combine(
+                    mission.WorkspacePath,
+                    "recovery-marker.txt");
+
+            if (!alwaysFail &&
+                File.Exists(marker))
+            {
+                return Task.FromResult(
+                    TaskExecutionResult.Succeeded(
+                        "Exact deterministic check passed.",
+                        JsonSerializer.Serialize(
+                            new ProcessRunResult(
+                                "dotnet",
+                                ["build"],
+                                0,
+                                false,
+                                5,
+                                "Build succeeded.",
+                                string.Empty))));
+            }
+
+            return Task.FromResult(
+                TaskExecutionResult.Failed(
+                    "Exact deterministic check failed.",
+                    "CS0103: simulated build error.",
+                    JsonSerializer.Serialize(
+                        new ProcessRunResult(
+                            "dotnet",
+                            ["build"],
+                            1,
+                            false,
+                            5,
+                            "CS0103: simulated build error.",
+                            string.Empty)),
+                    failureKind:
+                        TaskFailureKind.KnownDeterministicFailure));
+        }
+    }
+
+    private sealed class RecoveryRepairExecutor :
+        IMissionTaskExecutor,
+        IMissionTaskExecutionContextProvider
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.AgentWork;
+
+        public bool RequiresExecutionContext(
+            MissionTask task) => true;
+
+        public Task<string> CreateExecutionContextAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(
+                "recovery-test-baseline");
+
+        public async Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            var path =
+                Path.Combine(
+                    mission.WorkspacePath,
+                    "recovery-marker.txt");
+
+            await File.WriteAllTextAsync(
+                path,
+                "repaired",
+                cancellationToken);
+
+            return TaskExecutionResult.Succeeded(
+                "Applied bounded recovery repair.");
+        }
+    }
+
+    private sealed class InterruptingRecoveryRepairExecutor(
+        CancellationTokenSource interruption) :
+        IMissionTaskExecutor,
+        IMissionTaskExecutionContextProvider
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.AgentWork;
+
+        public bool RequiresExecutionContext(
+            MissionTask task) => true;
+
+        public Task<string> CreateExecutionContextAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(
+                "recovery-test-baseline");
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            interruption.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            throw new InvalidOperationException(
+                "Cancellation was expected.");
+        }
+    }
+
+    private sealed class FakeRecoveryPlanner :
+        IMissionRecoveryPlanner
+    {
+        public int Calls { get; private set; }
+
+        public Task<RecoveryPlanningResult>
+            PlanRecoveryAsync(
+                Mission mission,
+                MissionTask failedTask,
+                MissionTaskAttempt failureAttempt,
+                RecoveryCycle cycle,
+                CancellationToken cancellationToken = default)
+        {
+            Calls++;
+
+            var id =
+                RecoveryTaskNaming.GetRepairPrefix(
+                    failedTask.Id,
+                    cycle.CycleNumber) +
+                "fix-build";
+
+            var repair =
+                new PlannedTask(
+                    id,
+                    "Repair simulated build failure",
+                    PlannedExecutorKinds.LunaLow,
+                    "Fix the implementation that causes the deterministic build failure.",
+                    [],
+                    ["recovery-marker.txt"],
+                    [],
+                    [],
+                    new DeterministicOperation(
+                        DeterministicOperationKinds.None,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        string.Empty,
+                        60));
+
+            return Task.FromResult(
+                RecoveryPlanningResult.Succeeded(
+                    "Apply one bounded repair.",
+                    [repair],
+                    null));
+        }
+    }
+
+    private sealed class FailIfCalledRecoveryPlanner :
+        IMissionRecoveryPlanner
+    {
+        public int Calls { get; private set; }
+
+        public Task<RecoveryPlanningResult>
+            PlanRecoveryAsync(
+                Mission mission,
+                MissionTask failedTask,
+                MissionTaskAttempt failureAttempt,
+                RecoveryCycle cycle,
+                CancellationToken cancellationToken = default)
+        {
+            Calls++;
+
+            throw new InvalidOperationException(
+                "Persisted recovery should not invoke the Supervisor again.");
+        }
     }
 
     private sealed class FakeSupervisorTransport(
