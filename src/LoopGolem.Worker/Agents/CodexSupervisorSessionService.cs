@@ -101,7 +101,8 @@ public sealed class CodexSupervisorSessionService(
         if (mode != CodexSessionMode.Resume ||
             session is null ||
             !IsProviderSessionMissing(
-                result.Process))
+                result.Process,
+                session.ProviderThreadId!))
         {
             return result;
         }
@@ -292,19 +293,25 @@ public sealed class CodexSupervisorSessionService(
     }
 
     internal static bool IsProviderSessionMissing(
-        ProcessRunResult process)
+        ProcessRunResult process,
+        string providerThreadId)
     {
         if (process.TimedOut ||
-            process.ExitCode == 0)
+            process.ExitCode == 0 ||
+            string.IsNullOrWhiteSpace(
+                providerThreadId))
         {
             return false;
         }
 
+        var expected =
+            $"Session not found: {providerThreadId}";
+
         return process.StandardError.Contains(
-                   "Session not found:",
+                   expected,
                    StringComparison.OrdinalIgnoreCase) ||
                process.StandardOutput.Contains(
-                   "Session not found:",
+                   expected,
                    StringComparison.OrdinalIgnoreCase);
     }
 }
