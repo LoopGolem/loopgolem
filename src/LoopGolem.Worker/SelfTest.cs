@@ -53,6 +53,13 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyInterruptedRenameRecoveryAsync(
+                    processRunner,
+                    workspace))
+            {
+                return 1;
+            }
+
             var baseCommit = await GetHeadAsync(
                 processRunner,
                 workspace);
@@ -61,6 +68,23 @@ internal static class SelfTest
             {
                 Console.Error.WriteLine(
                     "Self-test could not resolve the baseline commit.");
+                return 1;
+            }
+
+            if (!await VerifyPreparedTaskRecoveryAsync(
+                    processRunner,
+                    workspace,
+                    baseCommit,
+                    root))
+            {
+                return 1;
+            }
+
+            if (!await VerifyInterruptedRunCommandStopsAsync(
+                    processRunner,
+                    workspace,
+                    root))
+            {
                 return 1;
             }
 
@@ -383,6 +407,333 @@ internal static class SelfTest
         }
     }
 
+    private static async Task<bool>
+        VerifyInterruptedRenameRecoveryAsync(
+            ProcessRunner processRunner,
+            string workspace)
+    {
+        var sourcePath = Path.Combine(
+            workspace,
+            "rename-source.txt");
+        var destinationPath = Path.Combine(
+            workspace,
+            "rename-destination.txt");
+
+        await File.WriteAllTextAsync(
+            sourcePath,
+            "rename recovery");
+
+        var executor =
+            new DeterministicTaskExecutor(processRunner);
+        var definition = new PlannedTask(
+            "rename-recovery",
+            "Verify interrupted rename recovery",
+            PlannedExecutorKinds.Deterministic,
+            string.Empty,
+            [],
+            ["rename-source.txt", "rename-destination.txt"],
+            [],
+            [],
+            new DeterministicOperation(
+                DeterministicOperationKinds.RenamePath,
+                string.Empty,
+                string.Empty,
+                "rename-source.txt",
+                "rename-destination.txt",
+                string.Empty,
+                [],
+                string.Empty,
+                30));
+        var now = DateTimeOffset.UtcNow;
+        var mission = new Mission(
+            "rename-recovery",
+            "Verify interrupted rename recovery",
+            workspace,
+            MissionExecutionMode.Codex,
+            MissionStatus.Running,
+            null,
+            null,
+            now,
+            now);
+        var task = new MissionTask(
+            "rename-recovery",
+            mission.Id,
+            1,
+            MissionTaskKind.DeterministicWork,
+            definition.Title,
+            definition,
+            DomainTaskStatus.Running,
+            null,
+            null,
+            null,
+            now,
+            now);
+
+        try
+        {
+            var context =
+                await executor.CreateExecutionContextAsync(
+                    mission,
+                    task);
+
+            File.Move(
+                sourcePath,
+                destinationPath);
+
+            var recovered = task with
+            {
+                Status = DomainTaskStatus.Retrying,
+                ExecutionContext = context
+            };
+
+            var result = await executor.ExecuteAsync(
+                mission,
+                recovered);
+
+            if (!result.Success ||
+                !File.Exists(destinationPath) ||
+                File.Exists(sourcePath))
+            {
+                Console.Error.WriteLine(
+                    "Self-test failed interrupted rename recovery.");
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+            File.Delete(destinationPath);
+        }
+    }
+
+    private static async Task<bool>
+        VerifyPreparedTaskRecoveryAsync(
+            ProcessRunner processRunner,
+            string workspace,
+            string baseCommit,
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "recovery-context.db");
+        var store = new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var plan = new MissionPlan(
+            "Exercise persisted execution context recovery.",
+            [
+                new PlannedTask(
+                    "recover-agent",
+                    "Recover prepared agent task",
+                    PlannedExecutorKinds.LunaLow,
+                    "Verify crash-safe recovery.",
+                    [],
+                    [],
+                    [],
+                    [],
+                    new DeterministicOperation(
+                        DeterministicOperationKinds.None,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        string.Empty,
+                        30))
+            ],
+            []);
+
+        using var interrupted = new CancellationTokenSource();
+
+        IMissionTaskExecutor[] firstExecutors =
+        [
+            new WorkspaceInspectionExecutor(),
+            new ProjectDiscoveryExecutor(),
+            new FakePlannerExecutor(
+                baseCommit,
+                plan),
+            new InterruptingPreparedExecutor(interrupted)
+        ];
+
+        var firstOrchestrator =
+            new MissionOrchestrator(
+                store,
+                firstExecutors);
+
+        var created =
+            await firstOrchestrator.CreateMissionAsync(
+                "Exercise persisted execution context recovery.",
+                workspace,
+                MissionExecutionMode.Codex);
+
+        try
+        {
+            await firstOrchestrator.RunMissionAsync(
+                created.Mission.Id,
+                interrupted.Token);
+
+            Console.Error.WriteLine(
+                "Self-test expected the prepared task to be interrupted.");
+            return false;
+        }
+        catch (OperationCanceledException)
+            when (interrupted.IsCancellationRequested)
+        {
+        }
+
+        var reopened = new SqliteMissionStore(database);
+        await reopened.InitializeAsync();
+
+        var interruptedSnapshot =
+            await reopened.GetAsync(
+                created.Mission.Id);
+        var interruptedTask =
+            interruptedSnapshot?.Tasks.FirstOrDefault(
+                task =>
+                    task.Kind ==
+                    MissionTaskKind.AgentWork);
+
+        if (interruptedSnapshot is null ||
+            interruptedTask is null ||
+            interruptedTask.Status !=
+                DomainTaskStatus.Running ||
+            interruptedTask.ExecutionContext !=
+                PreparedRecoveryContext)
+        {
+            Console.Error.WriteLine(
+                "Self-test did not persist the pre-execution recovery context.");
+            return false;
+        }
+
+        IMissionTaskExecutor[] recoveryExecutors =
+        [
+            new RecoveringPreparedExecutor(),
+            new GitChangesExecutor(processRunner),
+            new DotNetBuildExecutor(processRunner),
+            new AlwaysOkValidatorExecutor()
+        ];
+
+        var recoveryOrchestrator =
+            new MissionOrchestrator(
+                reopened,
+                recoveryExecutors);
+
+        var completed =
+            await recoveryOrchestrator.RunMissionAsync(
+                created.Mission.Id);
+
+        if (completed is null ||
+            completed.Mission.Status !=
+                MissionStatus.Completed ||
+            completed.Tasks.First(
+                task =>
+                    task.Kind ==
+                    MissionTaskKind.AgentWork).Status !=
+                DomainTaskStatus.Completed)
+        {
+            Console.Error.WriteLine(
+                "Self-test did not resume the interrupted prepared task.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
+        VerifyInterruptedRunCommandStopsAsync(
+            ProcessRunner processRunner,
+            string workspace,
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "unsafe-command.db");
+        var store = new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        var missionId =
+            Guid.NewGuid().ToString("N");
+        var definition = new PlannedTask(
+            "unsafe-command",
+            "Do not replay interrupted command",
+            PlannedExecutorKinds.Deterministic,
+            string.Empty,
+            [],
+            [],
+            [],
+            [],
+            new DeterministicOperation(
+                DeterministicOperationKinds.RunCommand,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                "loopgolem-command-must-not-run",
+                [],
+                ".",
+                30));
+        var snapshot = new MissionSnapshot(
+            new Mission(
+                missionId,
+                "Do not replay an interrupted command.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now),
+            [
+                new MissionTask(
+                    Guid.NewGuid().ToString("N"),
+                    missionId,
+                    1,
+                    MissionTaskKind.DeterministicWork,
+                    definition.Title,
+                    definition,
+                    DomainTaskStatus.Running,
+                    null,
+                    null,
+                    null,
+                    now,
+                    now)
+            ]);
+
+        await store.CreateAsync(snapshot);
+
+        var orchestrator =
+            new MissionOrchestrator(
+                store,
+                [
+                    new DeterministicTaskExecutor(
+                        processRunner)
+                ]);
+
+        var recovered =
+            await orchestrator.RunMissionAsync(
+                missionId);
+
+        if (recovered is null ||
+            recovered.Mission.Status !=
+                MissionStatus.NeedsHumanAttention)
+        {
+            Console.Error.WriteLine(
+                "Self-test replayed or failed an interrupted run_command instead of requesting human attention.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private const string PreparedRecoveryContext =
+        "self-test-persisted-baseline";
+
     private static bool VerifySelfHostingPrompts(
         string workspace,
         string baseCommit,
@@ -571,6 +922,103 @@ internal static class SelfTest
         return executor.ExecuteAsync(
             mission,
             task);
+    }
+
+    private sealed class InterruptingPreparedExecutor(
+        CancellationTokenSource interruption) :
+        IMissionTaskExecutor,
+        IMissionTaskExecutionContextProvider
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.AgentWork;
+
+        public bool RequiresExecutionContext(
+            MissionTask task) => true;
+
+        public Task<string> CreateExecutionContextAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(
+                PreparedRecoveryContext);
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            interruption.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            throw new InvalidOperationException(
+                "Cancellation was expected.");
+        }
+    }
+
+    private sealed class RecoveringPreparedExecutor :
+        IMissionTaskExecutor,
+        IMissionTaskExecutionContextProvider
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.AgentWork;
+
+        public bool RequiresExecutionContext(
+            MissionTask task) => true;
+
+        public Task<string> CreateExecutionContextAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException(
+                "Recovery must reuse the persisted execution context.");
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            if (task.Status !=
+                    DomainTaskStatus.Retrying ||
+                task.ExecutionContext !=
+                    PreparedRecoveryContext)
+            {
+                return Task.FromResult(
+                    TaskExecutionResult.Failed(
+                        "Prepared recovery state was not reused.",
+                        "Expected Retrying with the original persisted execution context."));
+            }
+
+            return Task.FromResult(
+                TaskExecutionResult.Succeeded(
+                    "Recovered prepared task."));
+        }
+    }
+
+    private sealed class AlwaysOkValidatorExecutor :
+        IMissionTaskExecutor
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.ValidateMission;
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            var result = new ValidationResult(
+                "ok",
+                "Recovery validation passed.",
+                []);
+
+            return Task.FromResult(
+                TaskExecutionResult.Succeeded(
+                    result.Summary,
+                    JsonSerializer.Serialize(
+                        new ValidatorExecutionResult(
+                            "recovery-self-test-snapshot",
+                            result),
+                        JsonOptions)));
+        }
     }
 
     private sealed class FakePlannerExecutor(
