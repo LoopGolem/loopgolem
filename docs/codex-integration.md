@@ -87,7 +87,7 @@ LoopGolem has three explicit Codex CLI transport modes:
 
 The transport reads JSONL stdout incrementally. Persistent thread identity is therefore crash-safe once `thread.started` has been observed. Completed turns persist duration and token dimensions in `agent_turns`.
 
-Planner runs as the first turn of one persistent **Supervisor** session per mission. Deterministic-recovery planning resumes this same Supervisor through `Resume`, preserving the reasoning context that created the mission plan. Luna Low workers and the final Validator remain fresh/independent at this stage; their own reuse policies are later steps so those variables stay isolated.
+Planner runs as the first turn of one persistent **Supervisor** session per mission. Deterministic-recovery planning resumes this same Supervisor through `Resume`, preserving the reasoning context that created the mission plan. The final Validator remains independent. Luna Low workers now have a separate bounded affinity-reuse policy described below; Supervisor and Worker sessions are never interchangeable.
 
 If a Supervisor resume fails with the Codex CLI's explicit `Session not found: <expected-thread-id>` error, LoopGolem invalidates that logical session with reason `provider_session_not_found`, reconstructs mission context from persisted mission/task/capability state, and starts a replacement persistent Supervisor. Other errors such as quota/auth/transient failures do not trigger a session reset. An active Supervisor with no persisted provider thread id, a model/reasoning mismatch, or a duplicate active Supervisor is also invalidated deterministically before selection.
 
@@ -99,13 +99,25 @@ The Supervisor may return only a small batch of Luna Low repair tasks (currently
 
 A failed recheck returns to the same Supervisor for the next recovery cycle, up to the mission's configured `MaxRecoveryCycles`. If the Supervisor thread itself has disappeared, the controlled session-reset path reconstructs context from persisted mission tasks, task attempts, recovery cycles, and capability evidence before planning continues.
 
-Luna Low repair calls are still fresh sessions in step 5. Reusing Low context is a separate policy/benchmark variable implemented later.
+Luna Low repair calls use the same bounded Worker affinity policy as normal Luna Low microtasks. They remain separate mission tasks with their own baselines and verification.
 
 ## Luna Low workers
 
-Each Luna Low call is currently a fresh bounded task. It receives the microtask goal, read files, write allowlist and acceptance checks rather than the entire original mission context.
+Luna Low work remains task-scoped even when transport context is reused. Every microtask keeps its own persisted task status, execution attempt, Git baseline, token usage, write allowlist, acceptance checks and deterministic post-task verification.
 
-Codex is instructed not to commit, push, create branches or rewrite Git history. LoopGolem verifies the actual changed files after every worker call and rejects edits outside the task's write allowlist.
+For new missions, `SessionReuseMode.Affinity` is enabled by default. `SessionReuseMode.Disabled` preserves the earlier `FreshEphemeral` behavior for controlled A/B benchmarks.
+
+With affinity enabled, the first eligible Luna Low microtask starts a persistent Worker thread. After a successful turn, Luna Low returns a small `contextReuse` hint saying whether its current repository understanding is likely to help an immediate follow-up task. The hint is persisted on the `AgentTurn`, but it is not authoritative.
+
+LoopGolem reuses a Worker session only when both the model hint and deterministic affinity rules agree. Direct task dependencies and read-after-write file relationships carry the strongest weight. Write/write overlap, shared reads and shared directories can strengthen affinity. Any completed intervening task that writes into the relevant context footprint cancels reuse for that candidate.
+
+Worker sessions are deliberately bounded. The default policy allows at most 3 accepted microtasks per Worker session, 30 minutes of idle time and 4 active Worker sessions per mission. Exceeding a cap closes the session; policy/model changes, missing provider thread ids, stale crash leases, uncommitted prior tasks and rejected worker results invalidate it.
+
+A lease owner task id is persisted before a resumable Worker thread is handed to Codex. The current scheduler is serial, and a leased session is never considered available to another task. If the Worker process dies mid-turn, the stale lease causes the old Worker session to be invalidated on the next attempt; the task retries in a fresh Low session using its already-persisted Git baseline.
+
+If Codex reports that a selected Worker provider thread no longer exists, LoopGolem invalidates that logical Worker session and starts a fresh persistent Worker thread for the same microtask. Other worker failures do not silently trigger context reuse.
+
+Codex is instructed not to commit, push, create branches or rewrite Git history. LoopGolem verifies the actual changed files after every worker call and rejects edits outside the task's write allowlist. A timeout, invalid structured response, blocker, write-allowlist violation or deterministic verification mismatch invalidates that Worker context instead of recycling it.
 
 ## Final validation
 
@@ -141,7 +153,7 @@ Before each Luna Low call, LoopGolem persists a Git workspace baseline in missio
 
 LoopGolem invokes autonomous `codex exec` calls with JSON event output enabled and reads token usage from the completed-turn event. It persists input, cached-input, cache-write-input, output, reasoning-output and comparable total-token counts. Cached input is a subset of input and is not added a second time when computing totals. If the CLI does not provide `total_tokens`, LoopGolem computes the call total as input plus output.
 
-Every Codex call also receives a logical session and turn record containing role/purpose, model, reasoning effort, turn number and duration. Recovery Supervisor turns use purpose `Recovery` and are linked from persisted recovery cycles. Calls that still use `FreshEphemeral` close their logical session after the single turn; persistent modes keep the logical session active for later resume.
+Every Codex call also receives a logical session and turn record containing role/purpose, model, reasoning effort, turn number and duration. Recovery Supervisor turns use purpose `Recovery` and are linked from persisted recovery cycles. Worker turns additionally persist the model's context-reuse recommendation and reason. Calls using the explicit `FreshEphemeral` control mode close their logical session after the single turn; persistent modes keep the logical session active only while policy allows later resume.
 
 Task-level token usage remains available for mission execution and Desktop rollups, while `agent_sessions` and `agent_turns` preserve the richer dimensions needed for controlled benchmark analysis. If the Worker or Codex process is terminated before a usage event is returned, LoopGolem does not invent an estimate for that interrupted call; an incomplete turn can remain persisted for recovery analysis.
 
