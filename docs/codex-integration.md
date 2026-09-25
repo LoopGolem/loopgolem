@@ -98,6 +98,12 @@ A zero Codex exit code is never accepted as proof by itself. LoopGolem additiona
 
 Before each Luna Low call, LoopGolem persists a Git workspace baseline in mission state. If the Worker is interrupted, the next attempt reuses that same baseline rather than recapturing the partially modified workspace. This keeps write-allowlist verification meaningful across process restarts.
 
+## Token usage telemetry
+
+LoopGolem invokes autonomous `codex exec` calls with JSON event output enabled and reads token usage from the completed-turn event. It persists input, cached-input, output, optional reasoning-output, and total-token counts per mission task. Cached input is a subset of input and is not added a second time when computing totals. If the CLI does not provide `total_tokens`, LoopGolem computes the task-call total as input plus output.
+
+Token usage is accumulated across completed retries for the same task and summed across tasks for the mission total shown in the Desktop. If the Worker or Codex process is terminated before a usage event is returned, LoopGolem does not invent an estimate for that interrupted call.
+
 ## Future direction
 
 The integration can later move to Codex app-server or the official SDK for richer streaming, lifecycle control, quota telemetry and resumable sessions without changing mission semantics.
