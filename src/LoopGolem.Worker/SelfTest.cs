@@ -141,6 +141,15 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyValidationCyclePolicyAsync(
+                    processRunner,
+                    workspace,
+                    baseCommit,
+                    root))
+            {
+                return 1;
+            }
+
             if (!await VerifyWorkerSessionAffinityAsync(
                     root))
             {
@@ -1414,6 +1423,92 @@ internal static class SelfTest
         {
             Console.Error.WriteLine(
                 "Self-test Validator did not close its persistent session after final acceptance.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
+        VerifyValidationCyclePolicyAsync(
+            ProcessRunner processRunner,
+            string workspace,
+            string baseCommit,
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "validation-policy.db");
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var plan = new MissionPlan(
+            "Validate immediately after deterministic checks.",
+            [],
+            []);
+
+        IMissionTaskExecutor[] executors =
+        [
+            new WorkspaceInspectionExecutor(),
+            new ProjectDiscoveryExecutor(),
+            new FakePlannerExecutor(
+                baseCommit,
+                plan),
+            new GitChangesExecutor(
+                processRunner),
+            new DotNetBuildExecutor(
+                processRunner),
+            new AlwaysNotOkValidatorExecutor()
+        ];
+
+        var orchestrator =
+            new MissionOrchestrator(
+                store,
+                executors);
+        var created =
+            await orchestrator.CreateMissionAsync(
+                "Stop after one rejected validation cycle.",
+                workspace,
+                MissionExecutionMode.Codex);
+
+        created =
+            created with
+            {
+                Mission =
+                    created.Mission with
+                    {
+                        Policy =
+                            created.Mission.Policy with
+                            {
+                                MaxValidationCycles = 1
+                            }
+                    }
+            };
+        await store.UpdateAsync(
+            created);
+
+        var result =
+            await orchestrator.RunMissionAsync(
+                created.Mission.Id);
+
+        if (result?.Mission.Status !=
+                MissionStatus.NeedsHumanAttention ||
+            result.Tasks.Count(
+                task =>
+                    task.Kind ==
+                    MissionTaskKind.ValidateMission) !=
+                1 ||
+            result.Tasks.Any(
+                task =>
+                    task.Definition?.Id.StartsWith(
+                        "fix1_",
+                        StringComparison.Ordinal) ==
+                    true))
+        {
+            Console.Error.WriteLine(
+                "Self-test did not honor MissionPolicy.MaxValidationCycles.");
             return false;
         }
 
@@ -3600,6 +3695,62 @@ internal static class SelfTest
                             plan),
                         JsonOptions),
                     new TokenUsage(100, 40, 20, 5, 120)));
+    }
+
+    private sealed class AlwaysNotOkValidatorExecutor :
+        IMissionTaskExecutor
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.ValidateMission;
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            var context =
+                JsonSerializer.Deserialize<ValidatorContext>(
+                    task.Definition?.Prompt ??
+                        string.Empty,
+                    JsonOptions)
+                ?? throw new InvalidOperationException(
+                    "Validation policy self-test context is missing.");
+
+            var correction =
+                new PlannedTask(
+                    $"fix{context.Cycle}_should-not-run",
+                    "Correction beyond configured validation limit",
+                    PlannedExecutorKinds.Deterministic,
+                    string.Empty,
+                    [],
+                    ["validation-policy-marker.txt"],
+                    [],
+                    [],
+                    new DeterministicOperation(
+                        DeterministicOperationKinds.WriteFile,
+                        "validation-policy-marker.txt",
+                        "must not execute",
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        string.Empty,
+                        30));
+            var result =
+                new ValidationResult(
+                    "not_ok",
+                    "Reject the snapshot.",
+                    [correction]);
+
+            return Task.FromResult(
+                TaskExecutionResult.Succeeded(
+                    result.Summary,
+                    JsonSerializer.Serialize(
+                        new ValidatorExecutionResult(
+                            $"validation-policy-{context.Cycle}",
+                            result),
+                        JsonOptions)));
+        }
     }
 
     private sealed class FakeValidatorExecutor :
