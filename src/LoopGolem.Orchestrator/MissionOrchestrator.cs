@@ -263,6 +263,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         Status = DomainTaskStatus.Failed,
                         Result = result.Summary,
                         ResultDetails = result.Details,
+                        TokenUsage = CombineTokenUsage(
+                            running.TokenUsage,
+                            result.TokenUsage),
                         Error = result.Error ?? result.Summary,
                         UpdatedAtUtc = finishedAt
                     };
@@ -293,6 +296,9 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     Status = DomainTaskStatus.Completed,
                     Result = result.Summary,
                     ResultDetails = result.Details,
+                    TokenUsage = CombineTokenUsage(
+                        running.TokenUsage,
+                        result.TokenUsage),
                     Error = null,
                     UpdatedAtUtc = finishedAt
                 };
@@ -879,6 +885,15 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
 
         return true;
     }
+
+    private static TokenUsage? CombineTokenUsage(
+        TokenUsage? accumulated,
+        TokenUsage? current) =>
+        accumulated is null
+            ? current
+            : current is null
+                ? accumulated
+                : accumulated.Add(current);
 
     private async Task<MissionSnapshot>
         MarkMissionNeedsHumanAttentionAsync(
