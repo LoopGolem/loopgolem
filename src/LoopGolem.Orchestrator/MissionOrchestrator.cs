@@ -307,7 +307,25 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                     snapshot,
                     completed);
 
-                if (completed.Kind == MissionTaskKind.PlanMission)
+                if (completed.Kind == MissionTaskKind.InspectCapabilities)
+                {
+                    var capabilityExpansion =
+                        ApplyCapabilitySnapshot(
+                            snapshot,
+                            completed,
+                            finishedAt);
+
+                    if (capabilityExpansion.Error is not null)
+                    {
+                        return await MarkMissionFailedAsync(
+                            snapshot,
+                            capabilityExpansion.Error,
+                            cancellationToken);
+                    }
+
+                    snapshot = capabilityExpansion.Snapshot!;
+                }
+                else if (completed.Kind == MissionTaskKind.PlanMission)
                 {
                     var expansion = ExpandPlannerResult(
                         snapshot,
@@ -429,20 +447,34 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         ["inspect-workspace"]))
             };
 
-        steps.Add(
-            executionMode == MissionExecutionMode.Codex
-                ? (
+        if (executionMode == MissionExecutionMode.Codex)
+        {
+            steps.Add(
+                (
+                    MissionTaskKind.InspectCapabilities,
+                    "Inspect execution capabilities",
+                    InternalDefinition(
+                        "inspect-capabilities",
+                        ["discover-projects"])));
+
+            steps.Add(
+                (
                     MissionTaskKind.PlanMission,
                     "Plan mission",
                     InternalDefinition(
                         "plan-mission",
-                        ["discover-projects"]))
-                : (
+                        ["inspect-capabilities"])));
+        }
+        else
+        {
+            steps.Add(
+                (
                     MissionTaskKind.BuildDotNet,
                     "Build .NET workspace",
                     InternalDefinition(
                         "build-dotnet",
                         ["discover-projects"])));
+        }
 
         return steps
             .Select(
@@ -455,6 +487,55 @@ public sealed class MissionOrchestrator : IMissionOrchestrator
                         step.Definition,
                         now))
             .ToArray();
+    }
+
+    private static (
+        MissionSnapshot? Snapshot,
+        string? Error) ApplyCapabilitySnapshot(
+        MissionSnapshot snapshot,
+        MissionTask capabilityTask,
+        DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(
+                capabilityTask.ResultDetails))
+        {
+            return (
+                null,
+                "Capability inspection completed without a structured snapshot.");
+        }
+
+        MissionCapabilitySnapshot? capabilities;
+        try
+        {
+            capabilities =
+                JsonSerializer.Deserialize<MissionCapabilitySnapshot>(
+                    capabilityTask.ResultDetails,
+                    JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return (
+                null,
+                $"Capability inspection returned invalid JSON: {exception.Message}");
+        }
+
+        if (capabilities is null)
+        {
+            return (
+                null,
+                "Capability inspection returned an empty snapshot.");
+        }
+
+        return (
+            snapshot with
+            {
+                Mission = snapshot.Mission with
+                {
+                    Capabilities = capabilities,
+                    UpdatedAtUtc = now
+                }
+            },
+            null);
     }
 
     private static (

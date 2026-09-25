@@ -217,7 +217,8 @@ public sealed class DeterministicTaskExecutor(
             return TaskExecutionResult.Failed(
                 $"Command '{op.Executable}' timed out.",
                 $"Timeout: {op.TimeoutSeconds} seconds.",
-                details);
+                details,
+                failureKind: TaskFailureKind.DeterministicCheck);
         }
 
         if (result.ExitCode != 0)
@@ -228,7 +229,8 @@ public sealed class DeterministicTaskExecutor(
             return TaskExecutionResult.Failed(
                 $"Command '{op.Executable}' exited with code {result.ExitCode}.",
                 error.Trim(),
-                details);
+                details,
+                failureKind: TaskFailureKind.DeterministicCheck);
         }
 
         return TaskExecutionResult.Succeeded(

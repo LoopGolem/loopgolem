@@ -8,7 +8,7 @@ Mission state is persisted in SQLite because the orchestrator needs it for recov
 - each expanded microtask definition is stored in `mission_tasks.definition_json`;
 - normal task summaries/results remain in the mission database.
 
-The exact raw structured response from Codex is temporary during normal execution and is deleted with the runtime scratch directory.
+The exact raw structured response from Codex is temporary during normal execution and is deleted with the runtime scratch directory. Normalized session metadata, turn status/timing and token counters are persisted for orchestration, recovery and benchmark analysis; this does not persist the full Codex transcript.
 
 During development, Debug builds print the exact structured Planner and Luna Low final messages to the Worker console between `[LoopGolem diagnostics]` markers. Release builds keep this disabled unless `LOOPGOLEM_DEV_DIAGNOSTICS=1` is explicitly set.
 

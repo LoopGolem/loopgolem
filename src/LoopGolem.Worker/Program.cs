@@ -15,13 +15,18 @@ await store.InitializeAsync();
 
 var processRunner = new ProcessRunner();
 var codex = new CodexCliService(processRunner);
-var planning = new CodexPlanningService(processRunner, codex);
+var planning = new CodexPlanningService(
+    processRunner,
+    codex,
+    store);
 
 IMissionTaskExecutor[] executors =
 [
     new WorkspaceInspectionExecutor(),
     new ProjectDiscoveryExecutor(),
+    new CapabilityInspectionExecutor(processRunner, codex),
     new PlannerTaskExecutor(planning),
+    new RecoveryPlannerTaskExecutor(planning),
     new DeterministicTaskExecutor(processRunner),
     new MicroTaskAgentExecutor(planning, processRunner),
     new ValidatorTaskExecutor(planning),

@@ -138,6 +138,60 @@ public sealed class WslRuntimeService(ProcessRunner processRunner)
             standardInput);
     }
 
+
+    public Task<ProcessRunResult> RunLoginShellExecutableStreamingAsync(
+        string distribution,
+        string executable,
+        IEnumerable<string> arguments,
+        TimeSpan timeout,
+        Func<string, Task> onStandardOutputLine,
+        CancellationToken cancellationToken = default,
+        string? standardInput = null)
+    {
+        var commandParts = new List<string>
+        {
+            "exec",
+            BashQuote(executable)
+        };
+
+        commandParts.AddRange(arguments.Select(BashQuote));
+
+        return RunStreamingAsync(
+            distribution,
+            ["bash", "-lc", string.Join(" ", commandParts)],
+            timeout,
+            onStandardOutputLine,
+            cancellationToken,
+            standardInput);
+    }
+
+    public Task<ProcessRunResult> RunStreamingAsync(
+        string distribution,
+        IEnumerable<string> linuxArguments,
+        TimeSpan timeout,
+        Func<string, Task> onStandardOutputLine,
+        CancellationToken cancellationToken = default,
+        string? standardInput = null)
+    {
+        var arguments = new List<string>
+        {
+            "--distribution",
+            distribution,
+            "--"
+        };
+
+        arguments.AddRange(linuxArguments);
+
+        return processRunner.RunStreamingAsync(
+            "wsl.exe",
+            arguments,
+            Environment.CurrentDirectory,
+            timeout,
+            onStandardOutputLine,
+            cancellationToken,
+            standardInput);
+    }
+
     public Task<ProcessRunResult> RunAsync(
         string distribution,
         IEnumerable<string> linuxArguments,

@@ -68,6 +68,7 @@ public static class MissionPlanValidator
     [
         "inspect-workspace",
         "discover-projects",
+        "inspect-capabilities",
         "plan-mission",
         "inspect-git",
         "build-dotnet",
@@ -170,7 +171,9 @@ public static class MissionPlanValidator
         ReservedIds.Contains(id) ||
         id.StartsWith("inspect-git-", StringComparison.Ordinal) ||
         id.StartsWith("build-dotnet-", StringComparison.Ordinal) ||
-        id.StartsWith("validate-", StringComparison.Ordinal);
+        id.StartsWith("validate-", StringComparison.Ordinal) ||
+        id.StartsWith("recovery-plan-", StringComparison.Ordinal) ||
+        id.StartsWith("recover", StringComparison.Ordinal);
 
     private static string? ValidateDeterministic(PlannedTask task)
     {

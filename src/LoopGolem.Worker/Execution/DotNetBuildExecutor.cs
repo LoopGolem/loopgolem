@@ -48,7 +48,8 @@ public sealed class DotNetBuildExecutor(
             return TaskExecutionResult.Failed(
                 $"dotnet build timed out after {BuildTimeout.TotalMinutes:F0} minutes.",
                 "The .NET build exceeded its timeout.",
-                details);
+                details,
+                failureKind: TaskFailureKind.DeterministicCheck);
         }
 
         if (run.ExitCode != 0)
@@ -56,7 +57,8 @@ public sealed class DotNetBuildExecutor(
             return TaskExecutionResult.Failed(
                 $"dotnet build failed with exit code {run.ExitCode}.",
                 GetFailureMessage(run),
-                details);
+                details,
+                failureKind: TaskFailureKind.DeterministicCheck);
         }
 
         return TaskExecutionResult.Succeeded(

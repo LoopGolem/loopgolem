@@ -51,6 +51,12 @@ validator: gpt-6-luna / high
 
 LoopGolem never automatically escalates above GPT-6 Luna High. Repeated validation failure becomes `NeedsHumanAttention`.
 
+## Environment capabilities
+
+Before planning a Codex mission, LoopGolem probes and persists two separate capability sets. The agent environment is WSL2 on Windows and native on Linux; the host environment is the Worker process environment where deterministic commands and build verification execute. The initial probe records availability/version information for Git and .NET in both environments plus Codex status in the agent environment.
+
+The planner is explicitly told not to assign unavailable agent tools to Luna Low. When a required tool exists only on the host, it may schedule a deterministic `run_command` checkpoint instead. Luna Low receives the same snapshot and is told that host-only tools are informational rather than directly callable.
+
 ## Planner
 
 The planner runs read-only with repository-wide visibility. Its hidden contract requires a structured plan of small dependency-aware tasks containing precise read files, write files and acceptance checks.
@@ -104,6 +110,10 @@ LoopGolem invokes autonomous `codex exec` calls with JSON event output enabled a
 
 Token usage is accumulated across completed retries for the same task and summed across tasks for the mission total shown in the Desktop. If the Worker or Codex process is terminated before a usage event is returned, LoopGolem does not invent an estimate for that interrupted call.
 
+SQLite additionally stores normalized agent sessions and turns. Per-turn records retain model, reasoning effort, role/purpose, duration, input, cached input, cache-write input, output and reasoning-output usage independently from task aggregates.
+
+The CLI transport understands three modes: fresh ephemeral execution, a new persistent session, and `codex exec resume <thread-id>`. Current mission policy still selects fresh ephemeral calls, so behavior remains equivalent to the pre-reuse architecture. JSONL stdout is consumed incrementally; `thread.started` is persisted immediately so a later persistent-session policy can survive Worker restarts. Persistent modes explicitly disable Codex memories so session reuse can be measured independently from provider memory features.
+
 ## Future direction
 
-The integration can later move to Codex app-server or the official SDK for richer streaming, lifecycle control, quota telemetry and resumable sessions without changing mission semantics.
+Codex app-server or an official SDK remain possible future transports for richer lifecycle and quota control, but they are no longer required merely to test resumable session reuse. The mission/session semantics stay provider-independent.

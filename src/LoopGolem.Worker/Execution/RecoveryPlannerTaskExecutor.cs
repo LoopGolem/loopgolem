@@ -4,16 +4,16 @@ using LoopGolem.Worker.Agents;
 
 namespace LoopGolem.Worker.Execution;
 
-public sealed class PlannerTaskExecutor(
+public sealed class RecoveryPlannerTaskExecutor(
     CodexPlanningService planning) : IMissionTaskExecutor
 {
-    public MissionTaskKind Kind => MissionTaskKind.PlanMission;
+    public MissionTaskKind Kind => MissionTaskKind.PlanRecovery;
 
     public Task<TaskExecutionResult> ExecuteAsync(
         Mission mission,
         MissionTask task,
         CancellationToken cancellationToken = default) =>
-        planning.PlanAsync(
+        planning.RecoverAsync(
             mission,
             task,
             cancellationToken);

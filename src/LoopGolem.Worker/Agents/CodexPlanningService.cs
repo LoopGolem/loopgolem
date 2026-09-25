@@ -1,19 +1,23 @@
 using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
+using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Infrastructure;
 
 namespace LoopGolem.Worker.Agents;
 
 public sealed class CodexPlanningService(
     ProcessRunner processRunner,
-    CodexCliService runtime)
+    CodexCliService runtime,
+    IMissionStore store)
 {
     private sealed record StructuredRunResult(
         ProcessRunResult Process,
         string FinalMessage,
         string Details,
-        TokenUsage? TokenUsage);
+        TokenUsage? TokenUsage,
+        string SessionId,
+        string? ThreadId);
 
     public const string PlannerModel = "gpt-6-luna";
     public const string PlannerReasoning = "high";
@@ -40,6 +44,7 @@ public sealed class CodexPlanningService(
 
     public async Task<TaskExecutionResult> PlanAsync(
         Mission mission,
+        MissionTask task,
         CancellationToken cancellationToken = default)
     {
         var status = await runtime.GetStatusAsync(cancellationToken);
@@ -61,8 +66,17 @@ public sealed class CodexPlanningService(
             mission.WorkspacePath,
             cancellationToken);
 
+        var supervisorSession =
+            await ResolveSupervisorSessionRequestAsync(
+                mission,
+                cancellationToken);
+
         var run = await RunStructuredAsync(
-            mission.WorkspacePath,
+            mission,
+            task,
+            AgentSessionRole.Supervisor,
+            AgentTurnPurpose.Planning,
+            supervisorSession,
             PlannerModel,
             PlannerReasoning,
             "read-only",
@@ -130,6 +144,162 @@ public sealed class CodexPlanningService(
                 JsonOptions));
     }
 
+    public async Task<TaskExecutionResult> RecoverAsync(
+        Mission mission,
+        MissionTask task,
+        CancellationToken cancellationToken = default)
+    {
+        if (task.Definition is null ||
+            task.Kind != MissionTaskKind.PlanRecovery ||
+            string.IsNullOrWhiteSpace(task.Definition.Prompt))
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner context is missing.",
+                "LoopGolem did not provide deterministic failure context.");
+        }
+
+        RecoveryPlannerContext? context;
+        try
+        {
+            context = JsonSerializer.Deserialize<RecoveryPlannerContext>(
+                task.Definition.Prompt,
+                JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner context is invalid.",
+                exception.Message);
+        }
+
+        if (context is null)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner context is empty.",
+                "The persisted recovery context could not be restored.");
+        }
+
+        var status = await runtime.GetStatusAsync(cancellationToken);
+        var runtimeError = ValidateRuntime(status);
+        if (runtimeError is not null)
+        {
+            return runtimeError;
+        }
+
+        var supervisorSession =
+            await ResolveSupervisorSessionRequestAsync(
+                mission,
+                cancellationToken);
+
+        var run = await RunStructuredAsync(
+            mission,
+            task,
+            AgentSessionRole.Supervisor,
+            AgentTurnPurpose.Recovery,
+            supervisorSession,
+            PlannerModel,
+            PlannerReasoning,
+            "read-only",
+            RecoverySchema,
+            BuildRecoveryPrompt(
+                mission,
+                context),
+            cancellationToken);
+
+        DevelopmentDiagnostics.Write(
+            $"recovery.raw:{context.FailedDefinitionId}:{context.Cycle}",
+            mission.Id,
+            run.FinalMessage);
+
+        if (run.Process.TimedOut)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner timed out.",
+                "GPT-6 Luna High exceeded the recovery timeout.",
+                run.Details,
+                run.TokenUsage);
+        }
+
+        if (run.Process.ExitCode != 0)
+        {
+            return TaskExecutionResult.Failed(
+                $"Recovery planner exited with code {run.Process.ExitCode}.",
+                GetProcessError(run.Process),
+                run.Details,
+                run.TokenUsage);
+        }
+
+        RecoveryPlan? plan;
+        try
+        {
+            plan = JsonSerializer.Deserialize<RecoveryPlan>(
+                run.FinalMessage,
+                JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned invalid JSON.",
+                exception.Message,
+                run.Details,
+                run.TokenUsage);
+        }
+
+        if (plan is null)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned no repair plan.",
+                "The structured recovery response was empty.",
+                run.Details,
+                run.TokenUsage);
+        }
+
+        var validationError =
+            MissionPlanValidator.ValidateTasks(
+                plan.Tasks);
+
+        if (validationError is not null)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned invalid repair tasks.",
+                validationError,
+                run.Details,
+                run.TokenUsage);
+        }
+
+        if (plan.Tasks.Count == 0)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned no repair tasks.",
+                "A deterministic failure recovery cycle requires at least one repair microtask.",
+                run.Details,
+                run.TokenUsage);
+        }
+
+        var expectedPrefix =
+            $"recover{context.Cycle}_";
+
+        if (plan.Tasks.Any(
+                repair =>
+                    !repair.Id.StartsWith(
+                        expectedPrefix,
+                        StringComparison.Ordinal)))
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned repair ids outside the required namespace.",
+                $"Every repair id in recovery cycle {context.Cycle} must start with '{expectedPrefix}'.",
+                run.Details,
+                run.TokenUsage);
+        }
+
+        return TaskExecutionResult.Succeeded(
+            plan.Summary,
+            JsonSerializer.Serialize(
+                plan,
+                JsonOptions),
+            run.TokenUsage);
+    }
+
     public async Task<TaskExecutionResult> ValidateAsync(
         Mission mission,
         MissionTask task,
@@ -190,7 +360,11 @@ public sealed class CodexPlanningService(
         }
 
         var run = await RunStructuredAsync(
-            mission.WorkspacePath,
+            mission,
+            task,
+            AgentSessionRole.Validator,
+            AgentTurnPurpose.Validation,
+            CodexSessionRequest.EphemeralFresh,
             PlannerModel,
             PlannerReasoning,
             "read-only",
@@ -346,12 +520,18 @@ public sealed class CodexPlanningService(
         }
 
         var run = await RunStructuredAsync(
-            mission.WorkspacePath,
+            mission,
+            task,
+            AgentSessionRole.Worker,
+            AgentTurnPurpose.Work,
+            CodexSessionRequest.EphemeralFresh,
             WorkerModel,
             WorkerReasoning,
             "workspace-write",
             WorkerSchema,
-            BuildWorkerPrompt(definition),
+            BuildWorkerPrompt(
+                mission,
+                definition),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -470,7 +650,11 @@ public sealed class CodexPlanningService(
 
     private async Task<StructuredRunResult>
         RunStructuredAsync(
-            string workspace,
+            Mission mission,
+            MissionTask task,
+            AgentSessionRole role,
+            AgentTurnPurpose purpose,
+            CodexSessionRequest sessionRequest,
             string model,
             string reasoning,
             string sandbox,
@@ -478,6 +662,36 @@ public sealed class CodexPlanningService(
             string prompt,
             CancellationToken cancellationToken)
     {
+        var session = await PrepareSessionAsync(
+            mission,
+            task,
+            role,
+            model,
+            reasoning,
+            sessionRequest,
+            cancellationToken);
+
+        var turnStarted = DateTimeOffset.UtcNow;
+        var turn = new AgentTurn(
+            Guid.NewGuid().ToString("N"),
+            mission.Id,
+            session.Id,
+            task.Id,
+            purpose,
+            checked(session.TurnCount + 1),
+            model,
+            reasoning,
+            null,
+            turnStarted,
+            null,
+            null,
+            null,
+            null);
+
+        await store.SaveAgentTurnAsync(
+            turn,
+            cancellationToken);
+
         var runtimeDirectory = Path.Combine(
             Path.GetTempPath(),
             "LoopGolem",
@@ -489,6 +703,55 @@ public sealed class CodexPlanningService(
         var schemaPath = Path.Combine(runtimeDirectory, "schema.json");
 
         await File.WriteAllTextAsync(schemaPath, schema, cancellationToken);
+
+        async Task ObserveStandardOutputLineAsync(string line)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+
+                if (TryGetThreadId(root, out var threadId))
+                {
+                    if (!string.IsNullOrWhiteSpace(session.ThreadId) &&
+                        !string.Equals(
+                            session.ThreadId,
+                            threadId,
+                            StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException(
+                            $"Codex reported thread '{threadId}' while LoopGolem expected '{session.ThreadId}'.");
+                    }
+
+                    session = session with
+                    {
+                        ThreadId = threadId,
+                        LastUsedAtUtc = DateTimeOffset.UtcNow
+                    };
+
+                    await store.SaveAgentSessionAsync(
+                        session,
+                        CancellationToken.None);
+                }
+
+                if (TryGetUsageElement(root, out var usage))
+                {
+                    turn = turn with
+                    {
+                        TokenUsage = ParseUsageElement(usage)
+                    };
+
+                    await store.SaveAgentTurnAsync(
+                        turn,
+                        CancellationToken.None);
+                }
+            }
+            catch (JsonException)
+            {
+                // Some launchers can interleave non-JSON diagnostics with
+                // Codex JSONL. They remain in the captured stdout.
+            }
+        }
 
         try
         {
@@ -503,7 +766,7 @@ public sealed class CodexPlanningService(
 
                 var wslWorkspace = await _wsl.ConvertWindowsPathAsync(
                     distribution,
-                    workspace,
+                    mission.WorkspacePath,
                     cancellationToken);
                 var wslOutput = await _wsl.ConvertWindowsPathAsync(
                     distribution,
@@ -514,7 +777,7 @@ public sealed class CodexPlanningService(
                     schemaPath,
                     cancellationToken);
 
-                process = await _wsl.RunLoginShellExecutableAsync(
+                process = await _wsl.RunLoginShellExecutableStreamingAsync(
                     distribution,
                     "codex",
                     BuildArguments(
@@ -523,24 +786,28 @@ public sealed class CodexPlanningService(
                         reasoning,
                         sandbox,
                         wslSchema,
-                        wslOutput),
+                        wslOutput,
+                        sessionRequest),
                     ExecutionTimeout,
+                    ObserveStandardOutputLineAsync,
                     cancellationToken,
                     prompt);
             }
             else
             {
-                process = await processRunner.RunAsync(
+                process = await processRunner.RunStreamingAsync(
                     "codex",
                     BuildArguments(
-                        workspace,
+                        mission.WorkspacePath,
                         model,
                         reasoning,
                         sandbox,
                         schemaPath,
-                        outputPath),
-                    workspace,
+                        outputPath,
+                        sessionRequest),
+                    mission.WorkspacePath,
                     ExecutionTimeout,
+                    ObserveStandardOutputLineAsync,
                     cancellationToken,
                     prompt);
             }
@@ -549,14 +816,87 @@ public sealed class CodexPlanningService(
                 ? await File.ReadAllTextAsync(outputPath, cancellationToken)
                 : string.Empty;
 
-            var tokenUsage = ParseTokenUsage(
-                process.StandardOutput);
+            var tokenUsage =
+                turn.TokenUsage ??
+                ParseTokenUsage(process.StandardOutput);
+
+            var finishedAt = DateTimeOffset.UtcNow;
+            var transportSucceeded =
+                !process.TimedOut &&
+                process.ExitCode == 0;
+
+            turn = turn with
+            {
+                TokenUsage = tokenUsage,
+                CompletedAtUtc = finishedAt,
+                DurationMilliseconds = process.DurationMilliseconds,
+                Success = transportSucceeded,
+                Error = transportSucceeded
+                    ? null
+                    : GetProcessError(process)
+            };
+
+            await store.SaveAgentTurnAsync(
+                turn,
+                CancellationToken.None);
+
+            var persistent =
+                sessionRequest.Mode !=
+                CodexSessionMode.EphemeralFresh;
+
+            if (persistent &&
+                string.IsNullOrWhiteSpace(session.ThreadId))
+            {
+                session = session with
+                {
+                    Status = AgentSessionStatus.Invalidated,
+                    LastUsedAtUtc = finishedAt,
+                    ClosedAtUtc = finishedAt,
+                    TerminationReason =
+                        "Codex did not emit a resumable thread id."
+                };
+
+                await store.SaveAgentSessionAsync(
+                    session,
+                    CancellationToken.None);
+
+                throw new InvalidDataException(
+                    "Codex did not emit thread.started for a persistent session.");
+            }
+
+            session = session with
+            {
+                Status = persistent
+                    ? AgentSessionStatus.Active
+                    : AgentSessionStatus.Closed,
+                TurnCount = checked(session.TurnCount + 1),
+                MicrotaskCount = checked(
+                    session.MicrotaskCount +
+                    (role == AgentSessionRole.Worker ? 1 : 0)),
+                ResumeCount = checked(
+                    session.ResumeCount +
+                    (sessionRequest.Mode == CodexSessionMode.Resume ? 1 : 0)),
+                LastUsedAtUtc = finishedAt,
+                ClosedAtUtc = persistent
+                    ? null
+                    : finishedAt,
+                TerminationReason = persistent
+                    ? session.TerminationReason
+                    : "ephemeral"
+            };
+
+            await store.SaveAgentSessionAsync(
+                session,
+                CancellationToken.None);
 
             var details = JsonSerializer.Serialize(new
             {
                 model,
                 reasoning,
                 sandbox,
+                sessionMode = sessionRequest.Mode.ToString(),
+                sessionId = session.Id,
+                threadId = session.ThreadId,
                 tokenUsage,
                 process
             });
@@ -565,7 +905,9 @@ public sealed class CodexPlanningService(
                 process,
                 finalMessage.Trim(),
                 details,
-                tokenUsage);
+                tokenUsage,
+                session.Id,
+                session.ThreadId);
         }
         finally
         {
@@ -579,21 +921,231 @@ public sealed class CodexPlanningService(
         }
     }
 
-    private static IReadOnlyList<string> BuildArguments(
+    private async Task<CodexSessionRequest>
+        ResolveSupervisorSessionRequestAsync(
+            Mission mission,
+            CancellationToken cancellationToken)
+    {
+        if (mission.Policy.SessionReuse ==
+            SessionReuseMode.Disabled)
+        {
+            return CodexSessionRequest.EphemeralFresh;
+        }
+
+        var sessions = await store.ListAgentSessionsAsync(
+            mission.Id,
+            cancellationToken);
+
+        var activeSupervisors = sessions
+            .Where(session =>
+                session.Role == AgentSessionRole.Supervisor &&
+                session.Persistent &&
+                session.Status == AgentSessionStatus.Active)
+            .OrderByDescending(session => session.LastUsedAtUtc)
+            .ThenByDescending(session => session.CreatedAtUtc)
+            .ToArray();
+
+        foreach (var stale in activeSupervisors.Where(
+                     session =>
+                         string.IsNullOrWhiteSpace(
+                             session.ThreadId)))
+        {
+            await store.SaveAgentSessionAsync(
+                stale with
+                {
+                    Status = AgentSessionStatus.Invalidated,
+                    ClosedAtUtc = DateTimeOffset.UtcNow,
+                    TerminationReason =
+                        "Persistent supervisor session has no resumable Codex thread id."
+                },
+                cancellationToken);
+        }
+
+        var resumable = activeSupervisors
+            .Where(session =>
+                !string.IsNullOrWhiteSpace(
+                    session.ThreadId))
+            .ToArray();
+
+        var selected = resumable.FirstOrDefault();
+
+        if (selected is null)
+        {
+            return CodexSessionRequest.NewPersistent;
+        }
+
+        foreach (var superseded in resumable.Skip(1))
+        {
+            await store.SaveAgentSessionAsync(
+                superseded with
+                {
+                    Status = AgentSessionStatus.Invalidated,
+                    ClosedAtUtc = DateTimeOffset.UtcNow,
+                    TerminationReason =
+                        $"Superseded by supervisor session '{selected.Id}'."
+                },
+                cancellationToken);
+        }
+
+        return CodexSessionRequest.Resume(
+            selected.Id,
+            selected.ThreadId!);
+    }
+
+    internal static CodexSessionRequest
+        SelectSupervisorSessionRequest(
+            MissionExecutionPolicy policy,
+            IReadOnlyList<AgentSession> sessions)
+    {
+        if (policy.SessionReuse ==
+            SessionReuseMode.Disabled)
+        {
+            return CodexSessionRequest.EphemeralFresh;
+        }
+
+        var selected = sessions
+            .Where(session =>
+                session.Role == AgentSessionRole.Supervisor &&
+                session.Persistent &&
+                session.Status == AgentSessionStatus.Active &&
+                !string.IsNullOrWhiteSpace(
+                    session.ThreadId))
+            .OrderByDescending(session => session.LastUsedAtUtc)
+            .ThenByDescending(session => session.CreatedAtUtc)
+            .FirstOrDefault();
+
+        return selected is null
+            ? CodexSessionRequest.NewPersistent
+            : CodexSessionRequest.Resume(
+                selected.Id,
+                selected.ThreadId!);
+    }
+
+    private async Task<AgentSession> PrepareSessionAsync(
+        Mission mission,
+        MissionTask task,
+        AgentSessionRole role,
+        string model,
+        string reasoning,
+        CodexSessionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.Mode == CodexSessionMode.Resume)
+        {
+            if (string.IsNullOrWhiteSpace(request.SessionId) ||
+                string.IsNullOrWhiteSpace(request.ThreadId))
+            {
+                throw new InvalidOperationException(
+                    "A resumed Codex session requires both local session and thread ids.");
+            }
+
+            var sessions = await store.ListAgentSessionsAsync(
+                mission.Id,
+                cancellationToken);
+            var session = sessions.FirstOrDefault(
+                candidate =>
+                    string.Equals(
+                        candidate.Id,
+                        request.SessionId,
+                        StringComparison.Ordinal));
+
+            if (session is null ||
+                !session.Persistent ||
+                session.Status != AgentSessionStatus.Active ||
+                session.Role != role ||
+                !string.Equals(
+                    session.ThreadId,
+                    request.ThreadId,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    session.Model,
+                    model,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    session.ReasoningEffort,
+                    reasoning,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The requested Codex session cannot be resumed safely.");
+            }
+
+            return session;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var created = new AgentSession(
+            Guid.NewGuid().ToString("N"),
+            mission.Id,
+            role,
+            "codex",
+            null,
+            model,
+            reasoning,
+            request.Mode == CodexSessionMode.NewPersistent,
+            AgentSessionStatus.Active,
+            role == AgentSessionRole.Worker
+                ? task.Id
+                : null,
+            0,
+            0,
+            0,
+            now,
+            now,
+            null,
+            null);
+
+        await store.SaveAgentSessionAsync(
+            created,
+            cancellationToken);
+
+        return created;
+    }
+
+    internal static IReadOnlyList<string> BuildArguments(
         string workspace,
         string model,
         string reasoning,
         string sandbox,
         string schemaPath,
-        string outputPath) =>
+        string outputPath,
+        CodexSessionRequest sessionRequest)
+    {
+        var arguments = new List<string>
+        {
+            "exec"
+        };
+
+        if (sessionRequest.Mode == CodexSessionMode.Resume)
+        {
+            if (string.IsNullOrWhiteSpace(sessionRequest.ThreadId))
+            {
+                throw new ArgumentException(
+                    "Resume requires a Codex thread id.",
+                    nameof(sessionRequest));
+            }
+
+            arguments.Add("resume");
+            arguments.Add(sessionRequest.ThreadId);
+        }
+
+        arguments.AddRange(
         [
-            "exec",
-            "--json",
-            "--ephemeral",
+            "--json"
+        ]);
+
+        if (sessionRequest.Mode == CodexSessionMode.EphemeralFresh)
+        {
+            arguments.Add("--ephemeral");
+        }
+
+        arguments.AddRange(
+        [
             "--ignore-user-config",
             "--disable", "apps",
             "--disable", "plugins",
             "--disable", "multi_agent",
+            "--disable", "memories",
             "--color", "never",
             "--sandbox", sandbox,
             "--cd", workspace,
@@ -604,7 +1156,32 @@ public sealed class CodexPlanningService(
             "--output-schema", schemaPath,
             "--output-last-message", outputPath,
             "-"
-        ];
+        ]);
+
+        return arguments;
+    }
+
+    private static bool TryGetThreadId(
+        JsonElement root,
+        out string threadId)
+    {
+        if (root.TryGetProperty("type", out var type) &&
+            type.ValueKind == JsonValueKind.String &&
+            string.Equals(
+                type.GetString(),
+                "thread.started",
+                StringComparison.Ordinal) &&
+            root.TryGetProperty("thread_id", out var id) &&
+            id.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(id.GetString()))
+        {
+            threadId = id.GetString()!;
+            return true;
+        }
+
+        threadId = string.Empty;
+        return false;
+    }
 
     internal static TokenUsage? ParseTokenUsage(
         string jsonLines)
@@ -718,6 +1295,9 @@ public sealed class CodexPlanningService(
         var cachedInput = GetTokenCount(
             usage,
             "cached_input_tokens");
+        var cacheWriteInput = GetTokenCount(
+            usage,
+            "cache_write_input_tokens");
         var output = GetTokenCount(
             usage,
             "output_tokens");
@@ -738,7 +1318,10 @@ public sealed class CodexPlanningService(
             cachedInput,
             output,
             reasoningOutput,
-            total);
+            total)
+        {
+            CacheWriteInputTokens = cacheWriteInput
+        };
     }
 
     private static long GetTokenCount(
@@ -752,24 +1335,40 @@ public sealed class CodexPlanningService(
             ? count
             : 0;
 
-    internal static string BuildPlannerPrompt(Mission mission) =>
-        $"""
+    internal static string BuildPlannerPrompt(Mission mission)
+    {
+        var capabilities = mission.Capabilities is null
+            ? "Capability snapshot is unavailable."
+            : JsonSerializer.Serialize(
+                mission.Capabilities,
+                JsonOptions);
+
+        return $"""
         You are the LoopGolem mission planner running as GPT-6 Luna High.
         You may inspect the entire repository, but you must not modify it.
 
         USER GOAL:
         {mission.Goal}
 
+        EXECUTION CAPABILITIES:
+        {capabilities}
+
         Produce only the structured execution plan required by the schema.
 
         RULES:
         - Prefer many small, independently verifiable microtasks over broad tasks.
         - Every task id must be short, unique, stable, and referenced by dependsOn.
+        - The capability snapshot has two independent environments:
+          agentEnvironment is where Codex/Luna workers execute;
+          hostEnvironment is where LoopGolem deterministic executors run.
+        - Never ask a Luna Low worker to execute a tool marked unavailable in agentEnvironment.
+        - A tool available only in hostEnvironment may still be used through deterministic run_command checkpoints.
+        - Prefer host deterministic build/test checkpoints when the host has the required tool and the agent environment does not.
         - Use executor "deterministic" whenever the operation is exact and mechanical.
         - Deterministic operations are write_file, create_directory, rename_path, or run_command.
         - run_command is direct process execution: executable plus arguments, never a shell command string.
         - Use executor "luna_low" when implementation judgment is required.
-        - Luna Low receives only its microtask prompt, readFiles, writeFiles, and acceptanceChecks.
+        - Luna Low receives only its microtask prompt, readFiles, writeFiles, acceptanceChecks, and the environment capability snapshot.
         - Make readFiles and writeFiles precise repository-relative paths.
         - Luna Low may write ONLY writeFiles; include every file it must modify.
         - Use dependsOn whenever a task requires files or state produced by another task.
@@ -780,6 +1379,70 @@ public sealed class CodexPlanningService(
         - finalChecks lists repository-level checks that the final GPT-6 Luna High validator must review.
         - {SelfHostingRule}
         """;
+    }
+
+    internal static string BuildRecoveryPrompt(
+        Mission mission,
+        RecoveryPlannerContext context)
+    {
+        var capabilities = mission.Capabilities is null
+            ? "Capability snapshot is unavailable."
+            : JsonSerializer.Serialize(
+                mission.Capabilities,
+                JsonOptions);
+        var failedTask = JsonSerializer.Serialize(
+            context.FailedTaskDefinition,
+            JsonOptions);
+        var evidence = LimitPromptText(
+            context.FailureEvidenceJson,
+            16_000);
+        var failureError = LimitPromptText(
+            context.FailureError,
+            4_000);
+
+        return $"""
+        You are the LoopGolem recovery planner running as GPT-6 Luna High.
+        You are continuing supervision of an existing mission after a deterministic host check failed.
+        You may inspect the repository, but you must not modify it.
+
+        ORIGINAL USER GOAL:
+        {mission.Goal}
+
+        RECOVERY CYCLE:
+        {context.Cycle}
+
+        FAILED CHECK:
+        id: {context.FailedDefinitionId}
+        title: {context.FailedTaskTitle}
+        definition: {failedTask}
+
+        FAILURE SUMMARY:
+        {context.FailureSummary}
+
+        FAILURE ERROR:
+        {failureError}
+
+        DETERMINISTIC EVIDENCE:
+        {evidence}
+
+        EXECUTION CAPABILITIES:
+        {capabilities}
+
+        RULES:
+        - Diagnose the deterministic evidence and repository state.
+        - Return only the smallest repair microtasks needed to make the exact failed check pass.
+        - Do not replace, weaken, remove, or reinterpret the failed check.
+        - Prefer small Luna Low repair tasks for code changes requiring judgment.
+        - Use deterministic operations only for exact mechanical repairs.
+        - Luna Low repair tasks must have precise readFiles/writeFiles and may write only writeFiles.
+        - Do not assign tools unavailable in agentEnvironment to Luna Low.
+        - Host-only tools are available through deterministic run_command tasks.
+        - Repair dependencies may refer only to other repair tasks in this response.
+        - Every repair id must start with "recover{context.Cycle}_".
+        - Do not commit, push, create branches, or modify files.
+        - Never request a model above GPT-6 Luna.
+        """;
+    }
 
     internal static string BuildValidatorPrompt(
         Mission mission,
@@ -833,16 +1496,27 @@ public sealed class CodexPlanningService(
         """;
     }
 
-    private static string BuildWorkerPrompt(PlannedTask task)
+    internal static string BuildWorkerPrompt(
+        Mission mission,
+        PlannedTask task)
     {
         static string Lines(IEnumerable<string> values) =>
             string.Join(Environment.NewLine, values.Select(value => $"- {value}"));
+
+        var capabilities = mission.Capabilities is null
+            ? "Capability snapshot is unavailable."
+            : JsonSerializer.Serialize(
+                mission.Capabilities,
+                JsonOptions);
 
         return $"""
         TASK {task.Id}: {task.Title}
 
         GOAL:
         {task.Prompt}
+
+        EXECUTION CAPABILITIES:
+        {capabilities}
 
         READ FILES:
         {Lines(task.ReadFiles)}
@@ -855,11 +1529,14 @@ public sealed class CodexPlanningService(
 
         RULES:
         - This is one microtask. Do not broaden scope.
+        - You execute inside agentEnvironment, not hostEnvironment.
+        - Do not attempt tools marked unavailable in agentEnvironment.
+        - hostEnvironment capabilities are informational; you cannot directly invoke host-only tools.
         - Read the listed files first.
         - Do not modify any file outside ALLOWED WRITE FILES.
         - Do not commit, push, create branches, or rewrite Git history.
         - Network access is disabled.
-        - Run acceptance checks when practical.
+        - Run acceptance checks when practical and available in agentEnvironment.
         - Return "blocked" if blocked.
         - Return "changed" only if a permitted file actually changed.
         - Return "already_satisfied" only if no edit was required.
@@ -911,6 +1588,30 @@ public sealed class CodexPlanningService(
         return null;
     }
 
+    private static string LimitPromptText(
+        string? value,
+        int maxCharacters)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "(none)";
+        }
+
+        if (value.Length <= maxCharacters)
+        {
+            return value;
+        }
+
+        var headLength = maxCharacters / 3;
+        var tailLength = maxCharacters - headLength;
+
+        return value[..headLength] +
+            Environment.NewLine +
+            "... [truncated by LoopGolem] ..." +
+            Environment.NewLine +
+            value[^tailLength..];
+    }
+
     private static string GetProcessError(ProcessRunResult process) =>
         string.IsNullOrWhiteSpace(process.StandardError)
             ? process.StandardOutput.Trim()
@@ -933,6 +1634,86 @@ public sealed class CodexPlanningService(
             "blocker": { "type": "string" }
           },
           "required": ["outcome", "summary", "checks", "blocker"],
+          "additionalProperties": false
+        }
+        """;
+
+    private const string RecoverySchema =
+        """
+        {
+          "type": "object",
+          "properties": {
+            "summary": { "type": "string" },
+            "tasks": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "title": { "type": "string" },
+                  "executor": {
+                    "type": "string",
+                    "enum": ["deterministic", "luna_low"]
+                  },
+                  "prompt": { "type": "string" },
+                  "readFiles": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "writeFiles": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "acceptanceChecks": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "dependsOn": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "deterministic": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["none", "write_file", "create_directory", "rename_path", "run_command"]
+                      },
+                      "path": { "type": "string" },
+                      "content": { "type": "string" },
+                      "sourcePath": { "type": "string" },
+                      "destinationPath": { "type": "string" },
+                      "executable": { "type": "string" },
+                      "arguments": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                      },
+                      "workingDirectory": { "type": "string" },
+                      "timeoutSeconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 900
+                      }
+                    },
+                    "required": [
+                      "kind", "path", "content", "sourcePath",
+                      "destinationPath", "executable", "arguments",
+                      "workingDirectory", "timeoutSeconds"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id", "title", "executor", "prompt", "readFiles",
+                  "writeFiles", "acceptanceChecks", "dependsOn", "deterministic"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["summary", "tasks"],
           "additionalProperties": false
         }
         """;

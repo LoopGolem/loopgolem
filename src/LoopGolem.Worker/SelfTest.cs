@@ -4,6 +4,7 @@ using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Agents;
 using LoopGolem.Worker.Execution;
 using LoopGolem.Worker.Infrastructure;
+using Microsoft.Data.Sqlite;
 using DomainTaskStatus = LoopGolem.Core.Domain.TaskStatus;
 
 namespace LoopGolem.Worker;
@@ -47,6 +48,13 @@ internal static class SelfTest
             }
 
             if (!await VerifyRunCommandWorkingDirectoriesAsync(
+                    processRunner,
+                    workspace))
+            {
+                return 1;
+            }
+
+            if (!await VerifyStreamingProcessRunnerAsync(
                     processRunner,
                     workspace))
             {
@@ -102,7 +110,14 @@ internal static class SelfTest
                 return 1;
             }
 
-            if (!VerifyTokenUsageParsing())
+            if (!VerifyTokenUsageParsing() ||
+                !VerifyCodexSessionArguments() ||
+                !VerifySupervisorSessionSelection())
+            {
+                return 1;
+            }
+
+            if (!await VerifyLegacyDatabaseMigrationAsync(root))
             {
                 return 1;
             }
@@ -157,7 +172,9 @@ internal static class SelfTest
             if (!VerifySelfHostingPrompts(
                     workspace,
                     baseCommit,
-                    fakePlan))
+                    fakePlan) ||
+                !VerifyCapabilityPrompts(
+                    workspace))
             {
                 return 1;
             }
@@ -166,6 +183,7 @@ internal static class SelfTest
             [
                 new WorkspaceInspectionExecutor(),
                 new ProjectDiscoveryExecutor(),
+                new FakeCapabilityExecutor(),
                 new FakePlannerExecutor(
                     baseCommit,
                     fakePlan),
@@ -183,12 +201,21 @@ internal static class SelfTest
                 workspace,
                 MissionExecutionMode.Codex);
 
-            if (created.Tasks.Count != 3 ||
+            if (created.Tasks.Count != 4 ||
                 created.Tasks[0].Status != DomainTaskStatus.Ready ||
-                created.Tasks[2].Kind != MissionTaskKind.PlanMission)
+                created.Tasks[2].Kind != MissionTaskKind.InspectCapabilities ||
+                created.Tasks[3].Kind != MissionTaskKind.PlanMission)
             {
                 Console.Error.WriteLine(
                     "Self-test failed initial planning.");
+                return 1;
+            }
+
+            if (!await VerifyExecutionTelemetryPersistenceAsync(
+                    store,
+                    database,
+                    created))
+            {
                 return 1;
             }
 
@@ -197,7 +224,7 @@ internal static class SelfTest
 
             if (completed is null ||
                 completed.Mission.Status != MissionStatus.Completed ||
-                completed.Tasks.Count != 12 ||
+                completed.Tasks.Count != 13 ||
                 completed.Tasks.Any(
                     task =>
                         task.Status != DomainTaskStatus.Completed ||
@@ -205,6 +232,17 @@ internal static class SelfTest
             {
                 Console.Error.WriteLine(
                     "Self-test failed planner/validator mission execution.");
+                return 1;
+            }
+
+            if (completed.Mission.Capabilities is not { } capabilities ||
+                capabilities.FindAgentTool("dotnet") is not
+                    { Available: false } ||
+                capabilities.FindHostTool("dotnet") is not
+                    { Available: true })
+            {
+                Console.Error.WriteLine(
+                    "Self-test did not retain separate agent/host capabilities.");
                 return 1;
             }
 
@@ -246,11 +284,16 @@ internal static class SelfTest
                 created.Mission.Id);
 
             if (persisted is null ||
-                persisted.Tasks.Count != 12 ||
+                persisted.Tasks.Count != 13 ||
                 persisted.Tasks.Count(
                     task =>
                         task.Kind ==
                         MissionTaskKind.ValidateMission) != 2 ||
+                persisted.Mission.Capabilities is not { } persistedCapabilities ||
+                persistedCapabilities.FindAgentTool("dotnet") is not
+                    { Available: false } ||
+                persistedCapabilities.FindHostTool("dotnet") is not
+                    { Available: true } ||
                 persisted.Tasks.Any(
                     task => task.Definition is null) ||
                 persisted.Tasks.Sum(
@@ -276,6 +319,372 @@ internal static class SelfTest
             {
             }
         }
+    }
+
+
+
+    private static async Task<bool> VerifyStreamingProcessRunnerAsync(
+        ProcessRunner processRunner,
+        string workspace)
+    {
+        var lines = new List<string>();
+
+        var run = await processRunner.RunStreamingAsync(
+            "git",
+            ["--version"],
+            workspace,
+            TimeSpan.FromSeconds(30),
+            line =>
+            {
+                lines.Add(line);
+                return Task.CompletedTask;
+            });
+
+        if (run.ExitCode != 0 ||
+            run.TimedOut ||
+            lines.Count == 0 ||
+            !run.StandardOutput.Contains(
+                lines[0],
+                StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "Self-test did not stream process stdout while preserving captured output.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool VerifyCodexSessionArguments()
+    {
+        var ephemeral = CodexPlanningService.BuildArguments(
+            "/workspace",
+            "gpt-6-luna",
+            "low",
+            "workspace-write",
+            "/schema.json",
+            "/output.json",
+            CodexSessionRequest.EphemeralFresh);
+
+        var persistent = CodexPlanningService.BuildArguments(
+            "/workspace",
+            "gpt-6-luna",
+            "high",
+            "read-only",
+            "/schema.json",
+            "/output.json",
+            CodexSessionRequest.NewPersistent);
+
+        var resumed = CodexPlanningService.BuildArguments(
+            "/workspace",
+            "gpt-6-luna",
+            "high",
+            "read-only",
+            "/schema.json",
+            "/output.json",
+            CodexSessionRequest.Resume(
+                "local-session",
+                "codex-thread"));
+
+        if (!ephemeral.Contains("--ephemeral", StringComparer.Ordinal) ||
+            persistent.Contains("--ephemeral", StringComparer.Ordinal) ||
+            resumed.Contains("--ephemeral", StringComparer.Ordinal) ||
+            !ephemeral.Contains("memories", StringComparer.Ordinal) ||
+            !persistent.Contains("memories", StringComparer.Ordinal) ||
+            !resumed.Contains("memories", StringComparer.Ordinal) ||
+            resumed.Count < 3 ||
+            resumed[0] != "exec" ||
+            resumed[1] != "resume" ||
+            resumed[2] != "codex-thread")
+        {
+            Console.Error.WriteLine(
+                "Self-test Codex session transport arguments are invalid.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool VerifySupervisorSessionSelection()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var older = new AgentSession(
+            "supervisor-old",
+            "mission",
+            AgentSessionRole.Supervisor,
+            "codex",
+            "thread-old",
+            "gpt-6-luna",
+            "high",
+            true,
+            AgentSessionStatus.Active,
+            null,
+            1,
+            0,
+            0,
+            now.AddMinutes(-2),
+            now.AddMinutes(-2),
+            null,
+            null);
+        var newer = older with
+        {
+            Id = "supervisor-new",
+            ThreadId = "thread-new",
+            CreatedAtUtc = now.AddMinutes(-1),
+            LastUsedAtUtc = now.AddMinutes(-1)
+        };
+
+        var disabled =
+            CodexPlanningService.SelectSupervisorSessionRequest(
+                MissionExecutionPolicy.Default,
+                [newer]);
+        var firstPersistent =
+            CodexPlanningService.SelectSupervisorSessionRequest(
+                new MissionExecutionPolicy(
+                    SessionReuse: SessionReuseMode.Affinity),
+                []);
+        var resumed =
+            CodexPlanningService.SelectSupervisorSessionRequest(
+                new MissionExecutionPolicy(
+                    SessionReuse: SessionReuseMode.Affinity),
+                [older, newer]);
+
+        if (disabled.Mode !=
+                CodexSessionMode.EphemeralFresh ||
+            firstPersistent.Mode !=
+                CodexSessionMode.NewPersistent ||
+            resumed.Mode !=
+                CodexSessionMode.Resume ||
+            resumed.SessionId != "supervisor-new" ||
+            resumed.ThreadId != "thread-new")
+        {
+            Console.Error.WriteLine(
+                "Self-test supervisor session selection is invalid.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool> VerifyLegacyDatabaseMigrationAsync(
+        string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "legacy-migration.db");
+        Directory.CreateDirectory(
+            Path.GetDirectoryName(database)!);
+
+        await using (var connection =
+                     new SqliteConnection(
+                         new SqliteConnectionStringBuilder
+                         {
+                             DataSource = database
+                         }.ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE missions (
+                    id TEXT PRIMARY KEY,
+                    goal TEXT NOT NULL,
+                    workspace_path TEXT NOT NULL,
+                    execution_mode TEXT NOT NULL DEFAULT 'ValidateOnly',
+                    status TEXT NOT NULL,
+                    result TEXT NULL,
+                    error TEXT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+
+                CREATE TABLE mission_tasks (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'InspectWorkspace',
+                    title TEXT NOT NULL,
+                    definition_json TEXT NULL,
+                    execution_context TEXT NULL,
+                    execution_attempt_count INTEGER NOT NULL DEFAULT 0,
+                    token_usage_json TEXT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT NULL,
+                    result_details TEXT NULL,
+                    error TEXT NULL,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE
+                );
+
+                INSERT INTO missions (
+                    id, goal, workspace_path, execution_mode, status,
+                    created_utc, updated_utc)
+                VALUES (
+                    'legacy-mission', 'legacy goal', '.', 'Codex', 'Created',
+                    '2026-01-01T00:00:00.0000000+00:00',
+                    '2026-01-01T00:00:00.0000000+00:00');
+
+                INSERT INTO mission_tasks (
+                    id, mission_id, sequence, kind, title, status,
+                    created_utc, updated_utc)
+                VALUES (
+                    'legacy-task', 'legacy-mission', 1, 'InspectWorkspace',
+                    'Legacy task', 'Ready',
+                    '2026-01-01T00:00:00.0000000+00:00',
+                    '2026-01-01T00:00:00.0000000+00:00');
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var store = new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var snapshot = await store.GetAsync("legacy-mission");
+        if (snapshot is null ||
+            snapshot.Mission.Policy != MissionExecutionPolicy.Default ||
+            snapshot.Tasks.Count != 1)
+        {
+            Console.Error.WriteLine(
+                "Self-test did not migrate a legacy mission database safely.");
+            return false;
+        }
+
+        if ((await store.ListTaskAttemptsAsync("legacy-mission")).Count != 0 ||
+            (await store.ListAgentSessionsAsync("legacy-mission")).Count != 0 ||
+            (await store.ListAgentTurnsAsync("legacy-mission")).Count != 0 ||
+            (await store.ListRecoveryEpisodesAsync("legacy-mission")).Count != 0)
+        {
+            Console.Error.WriteLine(
+                "Self-test legacy migration created unexpected telemetry rows.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool> VerifyExecutionTelemetryPersistenceAsync(
+        SqliteMissionStore store,
+        string database,
+        MissionSnapshot snapshot)
+    {
+        var plannerTask = snapshot.Tasks.First(
+            task => task.Kind == MissionTaskKind.PlanMission);
+        var missionId = snapshot.Mission.Id;
+        var now = DateTimeOffset.UtcNow;
+
+        var configured = snapshot with
+        {
+            Mission = snapshot.Mission with
+            {
+                Policy = new MissionExecutionPolicy(
+                    MaxDeterministicRecoveryCycles: 4,
+                    MaxValidationCycles: 5,
+                    SessionReuse: SessionReuseMode.Affinity)
+            }
+        };
+        await store.UpdateAsync(configured);
+
+        var attempt = new MissionTaskAttempt(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            plannerTask.Id,
+            1,
+            TaskAttemptOutcome.Failed,
+            TaskFailureKind.DeterministicCheck,
+            "Synthetic deterministic failure.",
+            "{\"exitCode\":1}",
+            now,
+            now.AddMilliseconds(10));
+        await store.SaveTaskAttemptAsync(attempt);
+
+        var session = new AgentSession(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            AgentSessionRole.Supervisor,
+            "codex",
+            "self-test-thread",
+            "gpt-6-luna",
+            "high",
+            true,
+            AgentSessionStatus.Active,
+            null,
+            1,
+            0,
+            2,
+            now,
+            now,
+            null,
+            null);
+        await store.SaveAgentSessionAsync(session);
+
+        var turn = new AgentTurn(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            session.Id,
+            plannerTask.Id,
+            AgentTurnPurpose.Recovery,
+            1,
+            "gpt-6-luna",
+            "high",
+            new TokenUsage(100, 40, 20, 5, 120)
+            {
+                CacheWriteInputTokens = 7
+            },
+            now,
+            now.AddMilliseconds(25),
+            25,
+            true,
+            null);
+        await store.SaveAgentTurnAsync(turn);
+
+        var episode = new RecoveryEpisode(
+            Guid.NewGuid().ToString("N"),
+            missionId,
+            plannerTask.Id,
+            1,
+            RecoveryEpisodeStatus.Planning,
+            attempt.Id,
+            turn.Id,
+            ["repair-a", "repair-b"],
+            attempt.EvidenceJson,
+            now,
+            now);
+        await store.SaveRecoveryEpisodeAsync(episode);
+
+        var reopened = new SqliteMissionStore(database);
+        await reopened.InitializeAsync();
+
+        var persistedMission = await reopened.GetAsync(missionId);
+        var attempts = await reopened.ListTaskAttemptsAsync(missionId);
+        var sessions = await reopened.ListAgentSessionsAsync(missionId);
+        var turns = await reopened.ListAgentTurnsAsync(missionId);
+        var episodes = await reopened.ListRecoveryEpisodesAsync(missionId);
+
+        if (persistedMission?.Mission.Policy != configured.Mission.Policy ||
+            attempts.Count != 1 ||
+            attempts[0] != attempt ||
+            sessions.Count != 1 ||
+            sessions[0] != session ||
+            turns.Count != 1 ||
+            turns[0].TokenUsage is not { } usage ||
+            usage.InputTokens != 100 ||
+            usage.CachedInputTokens != 40 ||
+            usage.CacheWriteInputTokens != 7 ||
+            usage.OutputTokens != 20 ||
+            usage.ReasoningOutputTokens != 5 ||
+            usage.TotalTokens != 120 ||
+            episodes.Count != 1 ||
+            episodes[0].RepairTaskIds.Count != 2 ||
+            episodes[0].RepairTaskIds[0] != "repair-a" ||
+            episodes[0].RepairTaskIds[1] != "repair-b")
+        {
+            Console.Error.WriteLine(
+                "Self-test did not persist normalized execution telemetry.");
+            return false;
+        }
+
+        return true;
     }
 
     private static async Task<bool> InitializeGitAsync(
@@ -336,7 +745,7 @@ internal static class SelfTest
     private static bool VerifyTokenUsageParsing()
     {
         const string modernJson =
-            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"cache_write_input_tokens\":7,\"output_tokens\":20,\"reasoning_output_tokens\":5}}";
 
         var usage = CodexPlanningService.ParseTokenUsage(
             modernJson);
@@ -344,6 +753,7 @@ internal static class SelfTest
         if (usage is null ||
             usage.InputTokens != 100 ||
             usage.CachedInputTokens != 40 ||
+            usage.CacheWriteInputTokens != 7 ||
             usage.OutputTokens != 20 ||
             usage.ReasoningOutputTokens != 5 ||
             usage.TotalTokens != 120)
@@ -681,6 +1091,7 @@ internal static class SelfTest
         [
             new WorkspaceInspectionExecutor(),
             new ProjectDiscoveryExecutor(),
+            new FakeCapabilityExecutor(),
             new FakePlannerExecutor(
                 baseCommit,
                 plan),
@@ -885,6 +1296,119 @@ internal static class SelfTest
 
     private const string PreparedRecoveryContext =
         "self-test-persisted-baseline";
+
+    private static bool VerifyCapabilityPrompts(
+        string workspace)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var mission = new Mission(
+            "capability-prompt-test",
+            "Use host verification when agent tools are unavailable.",
+            workspace,
+            MissionExecutionMode.Codex,
+            MissionStatus.Running,
+            null,
+            null,
+            now,
+            now)
+        {
+            Capabilities = FakeCapabilitySnapshot()
+        };
+
+        var workerTask = new PlannedTask(
+            "capability-worker",
+            "Edit one file",
+            PlannedExecutorKinds.LunaLow,
+            "Edit Demo.csproj.",
+            ["Demo.csproj"],
+            ["Demo.csproj"],
+            ["Host build will verify the result."],
+            [],
+            new DeterministicOperation(
+                DeterministicOperationKinds.None,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                [],
+                string.Empty,
+                30));
+
+        var plannerPrompt =
+            CodexPlanningService.BuildPlannerPrompt(mission);
+        var workerPrompt =
+            CodexPlanningService.BuildWorkerPrompt(
+                mission,
+                workerTask);
+
+        if (!plannerPrompt.Contains(
+                "agentEnvironment",
+                StringComparison.Ordinal) ||
+            !plannerPrompt.Contains(
+                "hostEnvironment",
+                StringComparison.Ordinal) ||
+            !plannerPrompt.Contains(
+                "deterministic run_command checkpoints",
+                StringComparison.Ordinal) ||
+            !workerPrompt.Contains(
+                "You execute inside agentEnvironment, not hostEnvironment.",
+                StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "Self-test capability separation is missing from Codex prompts.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static MissionCapabilitySnapshot FakeCapabilitySnapshot()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        return new MissionCapabilitySnapshot(
+            new ExecutionEnvironmentCapabilities(
+                ExecutionEnvironmentKind.Agent,
+                "wsl2",
+                "Linux (WSL2)",
+                "self-test",
+                [
+                    new ToolCapability(
+                        "git",
+                        true,
+                        "git version self-test",
+                        null),
+                    new ToolCapability(
+                        "dotnet",
+                        false,
+                        null,
+                        "dotnet is not installed in the agent environment."),
+                    new ToolCapability(
+                        "codex",
+                        true,
+                        "codex-cli self-test",
+                        "Authenticated with ChatGPT.")
+                ]),
+            new ExecutionEnvironmentCapabilities(
+                ExecutionEnvironmentKind.Host,
+                "native/X64",
+                "Self-test host",
+                null,
+                [
+                    new ToolCapability(
+                        "git",
+                        true,
+                        "git version self-test",
+                        null),
+                    new ToolCapability(
+                        "dotnet",
+                        true,
+                        "10.0.self-test",
+                        null)
+                ]),
+            now);
+    }
 
     private static bool VerifySelfHostingPrompts(
         string workspace,
@@ -1170,6 +1694,26 @@ internal static class SelfTest
                             "recovery-self-test-snapshot",
                             result),
                         JsonOptions)));
+        }
+    }
+
+    private sealed class FakeCapabilityExecutor :
+        IMissionTaskExecutor
+    {
+        public MissionTaskKind Kind =>
+            MissionTaskKind.InspectCapabilities;
+
+        public Task<TaskExecutionResult> ExecuteAsync(
+            Mission mission,
+            MissionTask task,
+            CancellationToken cancellationToken = default)
+        {
+            var snapshot = FakeCapabilitySnapshot();
+
+            return Task.FromResult(
+                TaskExecutionResult.Succeeded(
+                    "Fake capability inspection complete.",
+                    JsonSerializer.Serialize(snapshot)));
         }
     }
 
