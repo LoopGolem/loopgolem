@@ -517,13 +517,13 @@ public sealed class CodexPlanningService(
             mission.Id,
             run,
             accepted: true,
-            keepActive,
-            keepActive
+            keepActive: keepActive,
+            reason: keepActive
                 ? "validation_cycle_complete"
                 : result.Status == "ok"
                     ? "validation_complete"
                     : "validation_limit_reached",
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
         return TaskExecutionResult.Succeeded(
             result.Summary,
@@ -547,8 +547,8 @@ public sealed class CodexPlanningService(
             run,
             accepted: false,
             keepActive: false,
-            reason,
-            CancellationToken.None);
+            reason: reason,
+            cancellationToken: CancellationToken.None);
 
         return failure;
     }
