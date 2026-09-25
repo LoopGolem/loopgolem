@@ -24,11 +24,16 @@ var capabilityService =
     new EnvironmentCapabilityService(
         processRunner,
         store);
+var supervisor =
+    new CodexSupervisorSessionService(
+        codexTransport,
+        store);
 var planning =
     new CodexPlanningService(
         processRunner,
         codex,
         codexTransport,
+        supervisor,
         capabilityService);
 
 IMissionTaskExecutor[] executors =
