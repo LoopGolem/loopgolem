@@ -341,7 +341,10 @@ public partial class MainWindow : Window
 
             if (!string.IsNullOrWhiteSpace(mission.Result))
             {
-                MissionResultText.Text = BuildDisplayResult(response.Mission.Tasks);
+                MissionResultText.Text =
+                    BuildDisplayResult(
+                        response.Mission.Tasks,
+                        response.Telemetry);
             }
             else if (!string.IsNullOrWhiteSpace(mission.Error))
             {
@@ -590,25 +593,20 @@ public partial class MainWindow : Window
             LocalizationService.CurrentCulture);
 
     private static string BuildDisplayResult(
-        IEnumerable<MissionTask> tasks)
+        IEnumerable<MissionTask> tasks,
+        MissionTelemetrySummary? telemetry)
     {
-        var materialized = tasks
+        var lines = tasks
             .OrderBy(task => task.Sequence)
-            .ToArray();
-
-        var lines = materialized
             .Where(task => !string.IsNullOrWhiteSpace(task.Result))
             .Select(task => $"{GetTaskTitle(task)}: {task.Result}")
             .ToList();
 
-        var totalTokens = materialized.Sum(
-            task => task.TokenUsage?.TotalTokens ?? 0);
-
-        if (totalTokens > 0)
+        if (telemetry is { TotalTokens: > 0 })
         {
             lines.Add(
                 $"{LocalizationService.Get("TotalTokens")}: " +
-                FormatTokenCount(totalTokens));
+                FormatTokenCount(telemetry.TotalTokens));
         }
 
         return string.Join(
