@@ -127,6 +127,13 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyPersistentSupervisorLifecycleAsync(
+                    workspace,
+                    root))
+            {
+                return 1;
+            }
+
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
@@ -846,6 +853,233 @@ internal static class SelfTest
         }
         catch (InvalidDataException)
         {
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
+        VerifyPersistentSupervisorLifecycleAsync(
+            string workspace,
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "supervisor-lifecycle.db");
+        var store = new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        var missionId =
+            $"supervisor-{Guid.NewGuid():N}";
+        var taskId =
+            $"supervisor-task-{Guid.NewGuid():N}";
+        var task = new MissionTask(
+            taskId,
+            missionId,
+            1,
+            MissionTaskKind.DeterministicWork,
+            "Persisted failed build check",
+            new PlannedTask(
+                "persisted-check",
+                "Persisted failed build check",
+                PlannedExecutorKinds.Deterministic,
+                string.Empty,
+                [],
+                [],
+                [],
+                [],
+                new DeterministicOperation(
+                    DeterministicOperationKinds.RunCommand,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    "dotnet",
+                    ["build"],
+                    ".",
+                    30)),
+            DomainTaskStatus.Failed,
+            null,
+            null,
+            "Build failed in persisted mission state.",
+            now,
+            now)
+        {
+            ExecutionAttemptCount = 1
+        };
+        var mission = new Mission(
+            missionId,
+            "Repair the mission after a deterministic build failure.",
+            workspace,
+            MissionExecutionMode.Codex,
+            MissionStatus.Running,
+            null,
+            null,
+            now,
+            now);
+
+        await store.CreateAsync(
+            new MissionSnapshot(
+                mission,
+                [task]));
+        await store.UpsertCapabilitySnapshotAsync(
+            CreateTestCapabilitySnapshot(
+                missionId,
+                now));
+
+        var fakeTransport =
+            new FakeSupervisorTransport(store);
+        var supervisor =
+            new CodexSupervisorSessionService(
+                fakeTransport,
+                store);
+
+        var planning =
+            await supervisor.RunPlanningAsync(
+                mission,
+                task,
+                "gpt-6-luna",
+                "high",
+                "{}",
+                "Initial planning prompt.");
+
+        if (fakeTransport.Requests.Count != 1 ||
+            fakeTransport.Requests[0].SessionMode !=
+                CodexSessionMode.NewPersistent ||
+            fakeTransport.Requests[0].Purpose !=
+                AgentTurnPurpose.Planning ||
+            string.IsNullOrWhiteSpace(
+                planning.ProviderThreadId))
+        {
+            Console.Error.WriteLine(
+                "Self-test did not create a persistent Supervisor for planning.");
+            return false;
+        }
+
+        var firstSessionId =
+            planning.SessionId;
+
+        var firstRecovery =
+            await supervisor.RunRecoveryAsync(
+                mission,
+                task.Id,
+                "gpt-6-luna",
+                "high",
+                "{}",
+                "Diagnose the deterministic failure.");
+
+        if (fakeTransport.Requests.Count != 2 ||
+            fakeTransport.Requests[1].SessionMode !=
+                CodexSessionMode.Resume ||
+            fakeTransport.Requests[1].SessionId !=
+                firstSessionId ||
+            firstRecovery.SessionId !=
+                firstSessionId)
+        {
+            Console.Error.WriteLine(
+                "Self-test recovery did not resume the planning Supervisor.");
+            return false;
+        }
+
+        fakeTransport.FailNextResumeAsMissing = true;
+
+        var resetRecovery =
+            await supervisor.RunRecoveryAsync(
+                mission,
+                task.Id,
+                "gpt-6-luna",
+                "high",
+                "{}",
+                "Diagnose the deterministic failure after restart.");
+
+        if (fakeTransport.Requests.Count != 4 ||
+            fakeTransport.Requests[2].SessionMode !=
+                CodexSessionMode.Resume ||
+            fakeTransport.Requests[2].SessionId !=
+                firstSessionId ||
+            fakeTransport.Requests[3].SessionMode !=
+                CodexSessionMode.NewPersistent ||
+            fakeTransport.Requests[3].Purpose !=
+                AgentTurnPurpose.Recovery ||
+            resetRecovery.SessionId ==
+                firstSessionId ||
+            !fakeTransport.Requests[3].Prompt.Contains(
+                "SUPERVISOR SESSION RESET",
+                StringComparison.Ordinal) ||
+            !fakeTransport.Requests[3].Prompt.Contains(
+                mission.Goal,
+                StringComparison.Ordinal) ||
+            !fakeTransport.Requests[3].Prompt.Contains(
+                task.Title,
+                StringComparison.Ordinal) ||
+            !fakeTransport.Requests[3].Prompt.Contains(
+                "AGENT ENVIRONMENT",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                "Self-test Supervisor reset did not rebuild persisted mission context.");
+            return false;
+        }
+
+        var sessions =
+            await store.ListAgentSessionsAsync(
+                missionId);
+        var oldSession =
+            sessions.SingleOrDefault(
+                candidate =>
+                    candidate.Id ==
+                    firstSessionId);
+        var newSession =
+            sessions.SingleOrDefault(
+                candidate =>
+                    candidate.Id ==
+                    resetRecovery.SessionId);
+
+        if (oldSession?.Status !=
+                AgentSessionStatus.Invalidated ||
+            oldSession.TerminationReason !=
+                "provider_session_not_found" ||
+            newSession?.Status !=
+                AgentSessionStatus.Active ||
+            string.IsNullOrWhiteSpace(
+                newSession.ProviderThreadId))
+        {
+            Console.Error.WriteLine(
+                "Self-test Supervisor reset state was not persisted correctly.");
+            return false;
+        }
+
+        var missingProcess =
+            new ProcessRunResult(
+                "codex",
+                [],
+                1,
+                false,
+                1,
+                string.Empty,
+                "Session not found: missing-thread");
+        var quotaProcess =
+            new ProcessRunResult(
+                "codex",
+                [],
+                1,
+                false,
+                1,
+                string.Empty,
+                "usage limit reached");
+
+        if (!CodexSupervisorSessionService
+                .IsProviderSessionMissing(
+                    missingProcess) ||
+            CodexSupervisorSessionService
+                .IsProviderSessionMissing(
+                    quotaProcess))
+        {
+            Console.Error.WriteLine(
+                "Self-test Supervisor reset classification is too broad.");
+            return false;
         }
 
         return true;
@@ -1673,6 +1907,135 @@ internal static class SelfTest
         return executor.ExecuteAsync(
             mission,
             task);
+    }
+
+    private sealed class FakeSupervisorTransport(
+        IMissionStore store) : ICodexSessionTransport
+    {
+        private int _threadNumber;
+
+        public List<CodexStructuredRunRequest> Requests { get; } = [];
+
+        public bool FailNextResumeAsMissing { get; set; }
+
+        public async Task<CodexStructuredRunResult>
+            RunStructuredAsync(
+                CodexStructuredRunRequest request,
+                CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+
+            if (request.SessionMode ==
+                    CodexSessionMode.Resume &&
+                FailNextResumeAsMissing)
+            {
+                FailNextResumeAsMissing = false;
+
+                return new CodexStructuredRunResult(
+                    new ProcessRunResult(
+                        "codex",
+                        [],
+                        1,
+                        false,
+                        1,
+                        string.Empty,
+                        $"Session not found: {request.SessionId}"),
+                    string.Empty,
+                    "{}",
+                    null,
+                    request.SessionId!,
+                    null,
+                    0);
+            }
+
+            if (request.SessionMode ==
+                CodexSessionMode.NewPersistent)
+            {
+                var now = DateTimeOffset.UtcNow;
+                var sessionId =
+                    $"fake-supervisor-{Guid.NewGuid():N}";
+                var threadId =
+                    $"fake-thread-{++_threadNumber}";
+                var session = new AgentSession(
+                    sessionId,
+                    request.MissionId,
+                    request.Role,
+                    request.Model,
+                    request.ReasoningEffort,
+                    threadId,
+                    AgentSessionStatus.Active,
+                    null,
+                    1,
+                    0,
+                    null,
+                    now,
+                    now,
+                    now);
+
+                await store.UpsertAgentSessionAsync(
+                    session,
+                    cancellationToken);
+
+                return Success(
+                    request,
+                    session,
+                    1);
+            }
+
+            var sessions =
+                await store.ListAgentSessionsAsync(
+                    request.MissionId,
+                    cancellationToken);
+            var existing =
+                sessions.Single(
+                    candidate =>
+                        candidate.Id ==
+                        request.SessionId);
+            var turnNumber =
+                existing.TurnCount + 1;
+            var updated = existing with
+            {
+                TurnCount = turnNumber,
+                LastUsedAtUtc =
+                    DateTimeOffset.UtcNow,
+                UpdatedAtUtc =
+                    DateTimeOffset.UtcNow
+            };
+
+            await store.UpsertAgentSessionAsync(
+                updated,
+                cancellationToken);
+
+            return Success(
+                request,
+                updated,
+                turnNumber);
+        }
+
+        private static CodexStructuredRunResult Success(
+            CodexStructuredRunRequest request,
+            AgentSession session,
+            int turnNumber) =>
+            new(
+                new ProcessRunResult(
+                    "codex",
+                    [],
+                    0,
+                    false,
+                    1,
+                    string.Empty,
+                    string.Empty),
+                "{}",
+                "{}",
+                new TokenUsage(
+                    10,
+                    5,
+                    2,
+                    1,
+                    12),
+                session.Id,
+                session.ProviderThreadId,
+                turnNumber);
     }
 
     private sealed class InterruptingPreparedExecutor(
