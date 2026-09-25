@@ -263,6 +263,13 @@ public sealed class CodexSessionTransport(
                         cancellationToken)
                     : string.Empty;
 
+            var resumableThreadId =
+                request.SessionMode ==
+                    CodexSessionMode.FreshEphemeral
+                    ? null
+                    : session.ProviderThreadId ??
+                        observedThreadId;
+
             var details = JsonSerializer.Serialize(
                 new
                 {
@@ -270,8 +277,8 @@ public sealed class CodexSessionTransport(
                         request.SessionMode.ToString(),
                     sessionId = session.Id,
                     providerThreadId =
-                        session.ProviderThreadId ??
-                        observedThreadId,
+                        resumableThreadId,
+                    observedThreadId,
                     turnNumber,
                     model = request.Model,
                     reasoning = request.ReasoningEffort,
@@ -287,8 +294,7 @@ public sealed class CodexSessionTransport(
                 details,
                 latestUsage,
                 session.Id,
-                session.ProviderThreadId ??
-                    observedThreadId,
+                resumableThreadId,
                 turnNumber);
         }
         finally
