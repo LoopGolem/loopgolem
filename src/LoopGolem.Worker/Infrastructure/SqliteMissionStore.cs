@@ -655,6 +655,80 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         return turns;
     }
 
+    public async Task UpdateWithRecoveryEpisodeAsync(
+        MissionSnapshot snapshot,
+        RecoveryEpisode episode,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var missionCommand = connection.CreateCommand())
+        {
+            missionCommand.Transaction = (SqliteTransaction)transaction;
+            missionCommand.CommandText = """
+                UPDATE missions SET
+                    goal = $goal,
+                    workspace_path = $workspacePath,
+                    execution_mode = $executionMode,
+                    policy_json = $policyJson,
+                    capability_snapshot_json = $capabilitySnapshotJson,
+                    status = $status,
+                    result = $result,
+                    error = $error,
+                    created_utc = $createdUtc,
+                    updated_utc = $updatedUtc
+                WHERE id = $id;
+                """;
+
+            AddMissionParameters(missionCommand, snapshot.Mission);
+            await missionCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var task in snapshot.Tasks.OrderBy(task => task.Sequence))
+        {
+            await UpsertTaskAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                task,
+                cancellationToken);
+        }
+
+        await using (var recoveryCommand = connection.CreateCommand())
+        {
+            recoveryCommand.Transaction = (SqliteTransaction)transaction;
+            recoveryCommand.CommandText = """
+                INSERT INTO recovery_episodes (
+                    id, mission_id, failed_task_id, cycle, status, failed_attempt_id,
+                    recovery_turn_id, repair_task_ids_json, failure_evidence_json,
+                    created_utc, updated_utc)
+                VALUES (
+                    $id, $missionId, $failedTaskId, $cycle, $status, $failedAttemptId,
+                    $recoveryTurnId, $repairTaskIdsJson, $failureEvidenceJson,
+                    $createdUtc, $updatedUtc)
+                ON CONFLICT(id) DO UPDATE SET
+                    mission_id = excluded.mission_id,
+                    failed_task_id = excluded.failed_task_id,
+                    cycle = excluded.cycle,
+                    status = excluded.status,
+                    failed_attempt_id = excluded.failed_attempt_id,
+                    recovery_turn_id = excluded.recovery_turn_id,
+                    repair_task_ids_json = excluded.repair_task_ids_json,
+                    failure_evidence_json = excluded.failure_evidence_json,
+                    created_utc = excluded.created_utc,
+                    updated_utc = excluded.updated_utc;
+                """;
+
+            AddRecoveryEpisodeParameters(
+                recoveryCommand,
+                episode);
+
+            await recoveryCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task SaveRecoveryEpisodeAsync(
         RecoveryEpisode episode,
         CancellationToken cancellationToken = default)
@@ -683,25 +757,9 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 updated_utc = excluded.updated_utc;
             """;
 
-        command.Parameters.AddWithValue("$id", episode.Id);
-        command.Parameters.AddWithValue("$missionId", episode.MissionId);
-        command.Parameters.AddWithValue("$failedTaskId", episode.FailedTaskId);
-        command.Parameters.AddWithValue("$cycle", episode.Cycle);
-        command.Parameters.AddWithValue("$status", episode.Status.ToString());
-        command.Parameters.AddWithValue(
-            "$failedAttemptId",
-            (object?)episode.FailedAttemptId ?? DBNull.Value);
-        command.Parameters.AddWithValue(
-            "$recoveryTurnId",
-            (object?)episode.RecoveryTurnId ?? DBNull.Value);
-        command.Parameters.AddWithValue(
-            "$repairTaskIdsJson",
-            JsonSerializer.Serialize(episode.RepairTaskIds));
-        command.Parameters.AddWithValue(
-            "$failureEvidenceJson",
-            (object?)episode.FailureEvidenceJson ?? DBNull.Value);
-        command.Parameters.AddWithValue("$createdUtc", FormatTimestamp(episode.CreatedAtUtc));
-        command.Parameters.AddWithValue("$updatedUtc", FormatTimestamp(episode.UpdatedAtUtc));
+        AddRecoveryEpisodeParameters(
+            command,
+            episode);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -742,6 +800,31 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         }
 
         return episodes;
+    }
+
+    private static void AddRecoveryEpisodeParameters(
+        SqliteCommand command,
+        RecoveryEpisode episode)
+    {
+        command.Parameters.AddWithValue("$id", episode.Id);
+        command.Parameters.AddWithValue("$missionId", episode.MissionId);
+        command.Parameters.AddWithValue("$failedTaskId", episode.FailedTaskId);
+        command.Parameters.AddWithValue("$cycle", episode.Cycle);
+        command.Parameters.AddWithValue("$status", episode.Status.ToString());
+        command.Parameters.AddWithValue(
+            "$failedAttemptId",
+            (object?)episode.FailedAttemptId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$recoveryTurnId",
+            (object?)episode.RecoveryTurnId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$repairTaskIdsJson",
+            JsonSerializer.Serialize(episode.RepairTaskIds));
+        command.Parameters.AddWithValue(
+            "$failureEvidenceJson",
+            (object?)episode.FailureEvidenceJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$createdUtc", FormatTimestamp(episode.CreatedAtUtc));
+        command.Parameters.AddWithValue("$updatedUtc", FormatTimestamp(episode.UpdatedAtUtc));
     }
 
     private static void AddTokenUsageParameters(
