@@ -592,6 +592,18 @@ internal static class SelfTest
 
     private static bool VerifyCodexSessionProtocol()
     {
+        var defaultMissionRequest =
+            new WorkerRequest(
+                WorkerProtocol.CreateMission);
+
+        if (defaultMissionRequest.ExecutionMode !=
+            MissionExecutionMode.Codex)
+        {
+            Console.Error.WriteLine(
+                "Self-test Worker protocol no longer defaults mission creation to Codex.");
+            return false;
+        }
+
         var request = new CodexStructuredRunRequest(
             "protocol-mission",
             "protocol-task",
