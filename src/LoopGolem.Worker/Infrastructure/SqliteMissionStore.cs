@@ -31,6 +31,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     workspace_path TEXT NOT NULL,
                     execution_mode TEXT NOT NULL DEFAULT 'ValidateOnly',
                     policy_json TEXT NULL,
+                    capability_snapshot_json TEXT NULL,
                     status TEXT NOT NULL,
                     result TEXT NULL,
                     error TEXT NULL,
@@ -177,6 +178,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             cancellationToken);
         await EnsureColumnAsync(
             connection,
+            "missions",
+            "capability_snapshot_json",
+            "TEXT NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
             "mission_tasks",
             "kind",
             "TEXT NOT NULL DEFAULT 'InspectWorkspace'",
@@ -232,9 +239,9 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             missionCommand.Transaction = (SqliteTransaction)transaction;
             missionCommand.CommandText = """
                 INSERT INTO missions (
-                    id, goal, workspace_path, execution_mode, policy_json, status, result, error, created_utc, updated_utc)
+                    id, goal, workspace_path, execution_mode, policy_json, capability_snapshot_json, status, result, error, created_utc, updated_utc)
                 VALUES (
-                    $id, $goal, $workspacePath, $executionMode, $policyJson, $status, $result, $error, $createdUtc, $updatedUtc);
+                    $id, $goal, $workspacePath, $executionMode, $policyJson, $capabilitySnapshotJson, $status, $result, $error, $createdUtc, $updatedUtc);
                 """;
 
             AddMissionParameters(missionCommand, snapshot.Mission);
@@ -311,6 +318,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     workspace_path = $workspacePath,
                     execution_mode = $executionMode,
                     policy_json = $policyJson,
+                    capability_snapshot_json = $capabilitySnapshotJson,
                     status = $status,
                     result = $result,
                     error = $error,
@@ -892,7 +900,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         await using (var missionCommand = connection.CreateCommand())
         {
             missionCommand.CommandText = """
-                SELECT id, goal, workspace_path, execution_mode, policy_json, status, result, error, created_utc, updated_utc
+                SELECT id, goal, workspace_path, execution_mode, policy_json, capability_snapshot_json, status, result, error, created_utc, updated_utc
                 FROM missions
                 WHERE id = $id;
                 """;
@@ -906,17 +914,21 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     reader.GetString(1),
                     reader.GetString(2),
                     Enum.Parse<MissionExecutionMode>(reader.GetString(3)),
-                    Enum.Parse<MissionStatus>(reader.GetString(5)),
-                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    Enum.Parse<MissionStatus>(reader.GetString(6)),
                     reader.IsDBNull(7) ? null : reader.GetString(7),
-                    ParseTimestamp(reader.GetString(8)),
-                    ParseTimestamp(reader.GetString(9)))
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    ParseTimestamp(reader.GetString(9)),
+                    ParseTimestamp(reader.GetString(10)))
                 {
                     Policy = reader.IsDBNull(4)
                         ? MissionExecutionPolicy.Default
                         : JsonSerializer.Deserialize<MissionExecutionPolicy>(
                               reader.GetString(4))
-                          ?? MissionExecutionPolicy.Default
+                          ?? MissionExecutionPolicy.Default,
+                    Capabilities = reader.IsDBNull(5)
+                        ? null
+                        : JsonSerializer.Deserialize<MissionCapabilitySnapshot>(
+                            reader.GetString(5))
                 };
             }
         }
@@ -988,6 +1000,11 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Parameters.AddWithValue(
             "$policyJson",
             JsonSerializer.Serialize(mission.Policy));
+        command.Parameters.AddWithValue(
+            "$capabilitySnapshotJson",
+            mission.Capabilities is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(mission.Capabilities));
         command.Parameters.AddWithValue("$status", mission.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)mission.Result ?? DBNull.Value);
         command.Parameters.AddWithValue("$error", (object?)mission.Error ?? DBNull.Value);
