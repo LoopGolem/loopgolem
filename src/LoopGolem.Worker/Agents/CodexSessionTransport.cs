@@ -90,7 +90,7 @@ public sealed class CodexSessionTransport(
             turnNumber,
             startedAt,
             null,
-            request.LeaseOwnerTaskId,
+            null,
             0,
             0,
             0,
@@ -499,7 +499,7 @@ public sealed class CodexSessionTransport(
             isEphemeral
                 ? AgentSessionStatus.Closed
                 : AgentSessionStatus.Active,
-            null,
+            request.LeaseOwnerTaskId,
             0,
             0,
             isEphemeral
