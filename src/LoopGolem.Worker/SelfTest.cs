@@ -223,7 +223,7 @@ internal static class SelfTest
                 executable,
                 arguments);
 
-            if (result.Status != DomainTaskStatus.Completed)
+            if (!result.Success)
             {
                 Console.Error.WriteLine(
                     $"Self-test run_command failed for working directory '{workingDirectory}'.");
@@ -231,7 +231,7 @@ internal static class SelfTest
             }
 
             var processResult = JsonSerializer.Deserialize<ProcessRunResult>(
-                result.ResultDetails ?? string.Empty);
+                result.Details ?? string.Empty);
             if (processResult is null ||
                 !string.Equals(
                     Path.GetFullPath(processResult.StandardOutput.Trim()),
@@ -252,7 +252,7 @@ internal static class SelfTest
             "..",
             executable,
             arguments);
-        if (rejected.Status != DomainTaskStatus.Failed)
+        if (rejected.Success)
         {
             Console.Error.WriteLine("Self-test run_command accepted a parent directory.");
             return false;
