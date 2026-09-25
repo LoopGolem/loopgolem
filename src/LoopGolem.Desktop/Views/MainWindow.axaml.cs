@@ -251,9 +251,11 @@ public partial class MainWindow : Window
                 UseCodexCheckBox.IsChecked == true
                     ? MissionExecutionMode.Codex
                     : MissionExecutionMode.ValidateOnly,
-                ReuseLowContextCheckBox.IsChecked == true
-                    ? SessionReuseMode.Affinity
-                    : SessionReuseMode.Disabled);
+                UseCodexCheckBox.IsChecked == true
+                    ? ReuseLowContextCheckBox.IsChecked == true
+                        ? SessionReuseMode.Affinity
+                        : SessionReuseMode.Disabled
+                    : null);
         }
         catch
         {
