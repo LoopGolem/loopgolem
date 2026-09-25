@@ -134,6 +134,13 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyPersistentValidatorLifecycleAsync(
+                    workspace,
+                    root))
+            {
+                return 1;
+            }
+
             if (!await VerifyWorkerSessionAffinityAsync(
                     root))
             {
@@ -1142,6 +1149,271 @@ internal static class SelfTest
         {
             Console.Error.WriteLine(
                 "Self-test Supervisor reset classification is too broad.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
+        VerifyPersistentValidatorLifecycleAsync(
+            string workspace,
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "validator-lifecycle.db");
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        var missionId =
+            $"validator-{Guid.NewGuid():N}";
+        var mission =
+            new Mission(
+                missionId,
+                "Validate the final implementation independently.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now);
+
+        MissionTask ValidatorTask(
+            int sequence,
+            int cycle) =>
+            new(
+                $"validator-task-{cycle}-{Guid.NewGuid():N}",
+                missionId,
+                sequence,
+                MissionTaskKind.ValidateMission,
+                $"Validate mission cycle {cycle}",
+                null,
+                DomainTaskStatus.Ready,
+                null,
+                null,
+                null,
+                now,
+                now);
+
+        var firstTask =
+            ValidatorTask(1, 1);
+        var secondTask =
+            ValidatorTask(2, 2);
+        var thirdTask =
+            ValidatorTask(3, 3);
+
+        await store.CreateAsync(
+            new MissionSnapshot(
+                mission,
+                [
+                    firstTask,
+                    secondTask,
+                    thirdTask
+                ]));
+
+        var supervisorSession =
+            new AgentSession(
+                $"supervisor-{Guid.NewGuid():N}",
+                missionId,
+                AgentSessionRole.Supervisor,
+                CodexPlanningService.PlannerModel,
+                CodexPlanningService.PlannerReasoning,
+                $"supervisor-thread-{Guid.NewGuid():N}",
+                AgentSessionStatus.Active,
+                null,
+                2,
+                0,
+                null,
+                now,
+                now,
+                now);
+        await store.UpsertAgentSessionAsync(
+            supervisorSession);
+
+        var firstTransport =
+            new FakeSupervisorTransport(
+                store);
+        var validator =
+            new CodexValidatorSessionService(
+                firstTransport,
+                store);
+
+        var first =
+            await validator.RunValidationAsync(
+                mission,
+                firstTask,
+                CodexPlanningService.PlannerModel,
+                CodexPlanningService.PlannerReasoning,
+                "{}",
+                "Validate cycle 1.");
+
+        if (firstTransport.Requests.Count != 1 ||
+            firstTransport.Requests[0].Role !=
+                AgentSessionRole.Validator ||
+            firstTransport.Requests[0].Purpose !=
+                AgentTurnPurpose.Validation ||
+            firstTransport.Requests[0].SessionMode !=
+                CodexSessionMode.NewPersistent ||
+            first.SessionId ==
+                supervisorSession.Id ||
+            first.ProviderThreadId ==
+                supervisorSession.ProviderThreadId)
+        {
+            Console.Error.WriteLine(
+                "Self-test Validator did not start as an independent persistent High session.");
+            return false;
+        }
+
+        await validator.CompleteValidationAsync(
+            missionId,
+            first,
+            accepted: true,
+            keepActive: true,
+            "validation_cycle_complete");
+
+        var firstValidatorSessionId =
+            first.SessionId;
+        var firstValidatorThreadId =
+            first.ProviderThreadId;
+
+        // Simulate a Worker restart between validation cycles.
+        var reopened =
+            new SqliteMissionStore(database);
+        await reopened.InitializeAsync();
+        var restartedTransport =
+            new FakeSupervisorTransport(
+                reopened);
+        var restartedValidator =
+            new CodexValidatorSessionService(
+                restartedTransport,
+                reopened);
+
+        var second =
+            await restartedValidator.RunValidationAsync(
+                mission,
+                secondTask,
+                CodexPlanningService.PlannerModel,
+                CodexPlanningService.PlannerReasoning,
+                "{}",
+                "Validate cycle 2.");
+
+        if (restartedTransport.Requests.Count != 1 ||
+            restartedTransport.Requests[0].SessionMode !=
+                CodexSessionMode.Resume ||
+            restartedTransport.Requests[0].SessionId !=
+                firstValidatorSessionId ||
+            second.SessionId !=
+                firstValidatorSessionId ||
+            second.ProviderThreadId !=
+                firstValidatorThreadId)
+        {
+            Console.Error.WriteLine(
+                "Self-test Validator did not resume its persisted independent session after restart.");
+            return false;
+        }
+
+        await restartedValidator.CompleteValidationAsync(
+            missionId,
+            second,
+            accepted: true,
+            keepActive: true,
+            "validation_cycle_complete");
+
+        restartedTransport.FailNextResumeAsMissing =
+            true;
+
+        var replacement =
+            await restartedValidator.RunValidationAsync(
+                mission,
+                thirdTask,
+                CodexPlanningService.PlannerModel,
+                CodexPlanningService.PlannerReasoning,
+                "{}",
+                "Validate cycle 3 after provider session loss.");
+
+        if (restartedTransport.Requests.Count != 3 ||
+            restartedTransport.Requests[1].SessionMode !=
+                CodexSessionMode.Resume ||
+            restartedTransport.Requests[1].SessionId !=
+                firstValidatorSessionId ||
+            restartedTransport.Requests[2].SessionMode !=
+                CodexSessionMode.NewPersistent ||
+            restartedTransport.Requests[2].Role !=
+                AgentSessionRole.Validator ||
+            replacement.SessionId ==
+                firstValidatorSessionId ||
+            replacement.ProviderThreadId ==
+                firstValidatorThreadId)
+        {
+            Console.Error.WriteLine(
+                "Self-test Validator did not replace only its lost provider session.");
+            return false;
+        }
+
+        var sessions =
+            await reopened.ListAgentSessionsAsync(
+                missionId);
+        var persistedSupervisor =
+            sessions.Single(
+                session =>
+                    session.Id ==
+                    supervisorSession.Id);
+        var lostValidator =
+            sessions.Single(
+                session =>
+                    session.Id ==
+                    firstValidatorSessionId);
+        var replacementValidator =
+            sessions.Single(
+                session =>
+                    session.Id ==
+                    replacement.SessionId);
+
+        if (persistedSupervisor.Status !=
+                AgentSessionStatus.Active ||
+            persistedSupervisor.ProviderThreadId !=
+                supervisorSession.ProviderThreadId ||
+            persistedSupervisor.TerminationReason is not null ||
+            lostValidator.Status !=
+                AgentSessionStatus.Invalidated ||
+            lostValidator.TerminationReason !=
+                "provider_session_not_found" ||
+            replacementValidator.Status !=
+                AgentSessionStatus.Active)
+        {
+            Console.Error.WriteLine(
+                "Self-test Validator reset affected Supervisor independence or persisted the wrong lifecycle state.");
+            return false;
+        }
+
+        await restartedValidator.CompleteValidationAsync(
+            missionId,
+            replacement,
+            accepted: true,
+            keepActive: false,
+            "validation_complete");
+
+        sessions =
+            await reopened.ListAgentSessionsAsync(
+                missionId);
+        replacementValidator =
+            sessions.Single(
+                session =>
+                    session.Id ==
+                    replacement.SessionId);
+
+        if (replacementValidator.Status !=
+                AgentSessionStatus.Closed ||
+            replacementValidator.TerminationReason !=
+                "validation_complete")
+        {
+            Console.Error.WriteLine(
+                "Self-test Validator did not close its persistent session after final acceptance.");
             return false;
         }
 
