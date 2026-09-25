@@ -11,6 +11,24 @@ public sealed class MissionTelemetryService(
         string missionId,
         CancellationToken cancellationToken = default)
     {
+        var snapshot =
+            await store.GetAsync(
+                missionId,
+                cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Mission '{missionId}' was not found while aggregating telemetry.");
+
+        return await GetSummaryAsync(
+            snapshot,
+            cancellationToken);
+    }
+
+    public async Task<MissionTelemetrySummary> GetSummaryAsync(
+        MissionSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+    {
+        var missionId =
+            snapshot.Mission.Id;
         var sessions =
             await store.ListAgentSessionsAsync(
                 missionId,
@@ -64,7 +82,22 @@ public sealed class MissionTelemetryService(
                 })
                 .ToArray();
 
+        var effectiveEnd =
+            snapshot.Mission.Status is
+                MissionStatus.Completed or
+                MissionStatus.Failed or
+                MissionStatus.NeedsHumanAttention
+                ? snapshot.Mission.UpdatedAtUtc
+                : DateTimeOffset.UtcNow;
+        var durationMilliseconds =
+            Math.Max(
+                0,
+                (long)(effectiveEnd -
+                    snapshot.Mission.CreatedAtUtc)
+                    .TotalMilliseconds);
+
         return new MissionTelemetrySummary(
+            durationMilliseconds,
             sessions.Count,
             sessions.Count(
                 session =>
