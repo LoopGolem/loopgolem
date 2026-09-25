@@ -144,6 +144,162 @@ public sealed class CodexPlanningService(
                 JsonOptions));
     }
 
+    public async Task<TaskExecutionResult> RecoverAsync(
+        Mission mission,
+        MissionTask task,
+        CancellationToken cancellationToken = default)
+    {
+        if (task.Definition is null ||
+            task.Kind != MissionTaskKind.PlanRecovery ||
+            string.IsNullOrWhiteSpace(task.Definition.Prompt))
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner context is missing.",
+                "LoopGolem did not provide deterministic failure context.");
+        }
+
+        RecoveryPlannerContext? context;
+        try
+        {
+            context = JsonSerializer.Deserialize<RecoveryPlannerContext>(
+                task.Definition.Prompt,
+                JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner context is invalid.",
+                exception.Message);
+        }
+
+        if (context is null)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner context is empty.",
+                "The persisted recovery context could not be restored.");
+        }
+
+        var status = await runtime.GetStatusAsync(cancellationToken);
+        var runtimeError = ValidateRuntime(status);
+        if (runtimeError is not null)
+        {
+            return runtimeError;
+        }
+
+        var supervisorSession =
+            await ResolveSupervisorSessionRequestAsync(
+                mission,
+                cancellationToken);
+
+        var run = await RunStructuredAsync(
+            mission,
+            task,
+            AgentSessionRole.Supervisor,
+            AgentTurnPurpose.Recovery,
+            supervisorSession,
+            PlannerModel,
+            PlannerReasoning,
+            "read-only",
+            RecoverySchema,
+            BuildRecoveryPrompt(
+                mission,
+                context),
+            cancellationToken);
+
+        DevelopmentDiagnostics.Write(
+            $"recovery.raw:{context.FailedDefinitionId}:{context.Cycle}",
+            mission.Id,
+            run.FinalMessage);
+
+        if (run.Process.TimedOut)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner timed out.",
+                "GPT-6 Luna High exceeded the recovery timeout.",
+                run.Details,
+                run.TokenUsage);
+        }
+
+        if (run.Process.ExitCode != 0)
+        {
+            return TaskExecutionResult.Failed(
+                $"Recovery planner exited with code {run.Process.ExitCode}.",
+                GetProcessError(run.Process),
+                run.Details,
+                run.TokenUsage);
+        }
+
+        RecoveryPlan? plan;
+        try
+        {
+            plan = JsonSerializer.Deserialize<RecoveryPlan>(
+                run.FinalMessage,
+                JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned invalid JSON.",
+                exception.Message,
+                run.Details,
+                run.TokenUsage);
+        }
+
+        if (plan is null)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned no repair plan.",
+                "The structured recovery response was empty.",
+                run.Details,
+                run.TokenUsage);
+        }
+
+        var validationError =
+            MissionPlanValidator.ValidateTasks(
+                plan.Tasks);
+
+        if (validationError is not null)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned invalid repair tasks.",
+                validationError,
+                run.Details,
+                run.TokenUsage);
+        }
+
+        if (plan.Tasks.Count == 0)
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned no repair tasks.",
+                "A deterministic failure recovery cycle requires at least one repair microtask.",
+                run.Details,
+                run.TokenUsage);
+        }
+
+        var expectedPrefix =
+            $"recover{context.Cycle}_";
+
+        if (plan.Tasks.Any(
+                repair =>
+                    !repair.Id.StartsWith(
+                        expectedPrefix,
+                        StringComparison.Ordinal)))
+        {
+            return TaskExecutionResult.Failed(
+                "Recovery planner returned repair ids outside the required namespace.",
+                $"Every repair id in recovery cycle {context.Cycle} must start with '{expectedPrefix}'.",
+                run.Details,
+                run.TokenUsage);
+        }
+
+        return TaskExecutionResult.Succeeded(
+            plan.Summary,
+            JsonSerializer.Serialize(
+                plan,
+                JsonOptions),
+            run.TokenUsage);
+    }
+
     public async Task<TaskExecutionResult> ValidateAsync(
         Mission mission,
         MissionTask task,
@@ -1225,6 +1381,69 @@ public sealed class CodexPlanningService(
         """;
     }
 
+    internal static string BuildRecoveryPrompt(
+        Mission mission,
+        RecoveryPlannerContext context)
+    {
+        var capabilities = mission.Capabilities is null
+            ? "Capability snapshot is unavailable."
+            : JsonSerializer.Serialize(
+                mission.Capabilities,
+                JsonOptions);
+        var failedTask = JsonSerializer.Serialize(
+            context.FailedTaskDefinition,
+            JsonOptions);
+        var evidence = LimitPromptText(
+            context.FailureEvidenceJson,
+            16_000);
+        var failureError = LimitPromptText(
+            context.FailureError,
+            4_000);
+
+        return $"""
+        You are the LoopGolem recovery planner running as GPT-6 Luna High.
+        You are continuing supervision of an existing mission after a deterministic host check failed.
+        You may inspect the repository, but you must not modify it.
+
+        ORIGINAL USER GOAL:
+        {mission.Goal}
+
+        RECOVERY CYCLE:
+        {context.Cycle}
+
+        FAILED CHECK:
+        id: {context.FailedDefinitionId}
+        title: {context.FailedTaskTitle}
+        definition: {failedTask}
+
+        FAILURE SUMMARY:
+        {context.FailureSummary}
+
+        FAILURE ERROR:
+        {failureError}
+
+        DETERMINISTIC EVIDENCE:
+        {evidence}
+
+        EXECUTION CAPABILITIES:
+        {capabilities}
+
+        RULES:
+        - Diagnose the deterministic evidence and repository state.
+        - Return only the smallest repair microtasks needed to make the exact failed check pass.
+        - Do not replace, weaken, remove, or reinterpret the failed check.
+        - Prefer small Luna Low repair tasks for code changes requiring judgment.
+        - Use deterministic operations only for exact mechanical repairs.
+        - Luna Low repair tasks must have precise readFiles/writeFiles and may write only writeFiles.
+        - Do not assign tools unavailable in agentEnvironment to Luna Low.
+        - Host-only tools are available through deterministic run_command tasks.
+        - Repair dependencies may refer only to other repair tasks in this response.
+        - Every repair id must start with "recover{context.Cycle}_".
+        - Do not commit, push, create branches, or modify files.
+        - Never request a model above GPT-6 Luna.
+        """;
+    }
+
     internal static string BuildValidatorPrompt(
         Mission mission,
         ValidatorContext context,
@@ -1369,6 +1588,30 @@ public sealed class CodexPlanningService(
         return null;
     }
 
+    private static string LimitPromptText(
+        string? value,
+        int maxCharacters)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "(none)";
+        }
+
+        if (value.Length <= maxCharacters)
+        {
+            return value;
+        }
+
+        var headLength = maxCharacters / 3;
+        var tailLength = maxCharacters - headLength;
+
+        return value[..headLength] +
+            Environment.NewLine +
+            "... [truncated by LoopGolem] ..." +
+            Environment.NewLine +
+            value[^tailLength..];
+    }
+
     private static string GetProcessError(ProcessRunResult process) =>
         string.IsNullOrWhiteSpace(process.StandardError)
             ? process.StandardOutput.Trim()
@@ -1391,6 +1634,86 @@ public sealed class CodexPlanningService(
             "blocker": { "type": "string" }
           },
           "required": ["outcome", "summary", "checks", "blocker"],
+          "additionalProperties": false
+        }
+        """;
+
+    private const string RecoverySchema =
+        """
+        {
+          "type": "object",
+          "properties": {
+            "summary": { "type": "string" },
+            "tasks": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "title": { "type": "string" },
+                  "executor": {
+                    "type": "string",
+                    "enum": ["deterministic", "luna_low"]
+                  },
+                  "prompt": { "type": "string" },
+                  "readFiles": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "writeFiles": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "acceptanceChecks": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "dependsOn": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "deterministic": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["none", "write_file", "create_directory", "rename_path", "run_command"]
+                      },
+                      "path": { "type": "string" },
+                      "content": { "type": "string" },
+                      "sourcePath": { "type": "string" },
+                      "destinationPath": { "type": "string" },
+                      "executable": { "type": "string" },
+                      "arguments": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                      },
+                      "workingDirectory": { "type": "string" },
+                      "timeoutSeconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 900
+                      }
+                    },
+                    "required": [
+                      "kind", "path", "content", "sourcePath",
+                      "destinationPath", "executable", "arguments",
+                      "workingDirectory", "timeoutSeconds"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id", "title", "executor", "prompt", "readFiles",
+                  "writeFiles", "acceptanceChecks", "dependsOn", "deterministic"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["summary", "tasks"],
           "additionalProperties": false
         }
         """;
