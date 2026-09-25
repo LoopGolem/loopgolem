@@ -57,4 +57,6 @@
   <data name="CodexCliMissingWsl" xml:space="preserve"><value>יש להתקין Codex ב-WSL</value></data>
   <data name="CodexAuthRequiredWsl" xml:space="preserve"><value>נדרשת התחברות ל-ChatGPT ב-WSL</value></data>
   <data name="CodexAuthRequired" xml:space="preserve"><value>נדרשת התחברות ל-ChatGPT</value></data>
+  <data name="Tokens" xml:space="preserve"><value>אסימונים</value></data>
+  <data name="TotalTokens" xml:space="preserve"><value>סך האסימונים</value></data>
 </root>
