@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Text.Json;
+using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
 using LoopGolem.Orchestrator;
 
@@ -184,7 +185,12 @@ public sealed class WorkerPipeServer(
                     cancellationToken);
 
                 _ = ExecuteMissionSafelyAsync(snapshot.Mission.Id);
-                return new WorkerResponse(true, Mission: snapshot);
+                return new WorkerResponse(
+                    true,
+                    Mission: snapshot,
+                    Telemetry: await BuildMissionTelemetryAsync(
+                        snapshot.Mission.Id,
+                        cancellationToken));
             }
 
             case WorkerProtocol.GetMission:
@@ -204,7 +210,12 @@ public sealed class WorkerPipeServer(
                     ? Error(
                         WorkerErrorCodes.MissionNotFound,
                         "Mission not found.")
-                    : new WorkerResponse(true, Mission: snapshot);
+                    : new WorkerResponse(
+                        true,
+                        Mission: snapshot,
+                        Telemetry: await BuildMissionTelemetryAsync(
+                            request.MissionId,
+                            cancellationToken));
             }
 
             default:
@@ -212,6 +223,110 @@ public sealed class WorkerPipeServer(
                     WorkerErrorCodes.UnsupportedRequest,
                     $"Unsupported request type '{request.Type}'.");
         }
+    }
+
+    internal async Task<MissionTelemetrySummary>
+        BuildMissionTelemetryAsync(
+            string missionId,
+            CancellationToken cancellationToken = default)
+    {
+        var sessions =
+            await store.ListAgentSessionsAsync(
+                missionId,
+                cancellationToken);
+        var turns =
+            await store.ListAgentTurnsAsync(
+                missionId,
+                cancellationToken);
+        var recoveryCycles =
+            await store.ListRecoveryCyclesAsync(
+                missionId,
+                cancellationToken);
+
+        var roleSummaries =
+            Enum.GetValues<AgentSessionRole>()
+                .Select(role =>
+                {
+                    var roleSessions =
+                        sessions.Where(
+                            session =>
+                                session.Role == role)
+                            .ToArray();
+                    var sessionIds =
+                        roleSessions
+                            .Select(session => session.Id)
+                            .ToHashSet(
+                                StringComparer.Ordinal);
+                    var roleTurns =
+                        turns.Where(
+                            turn =>
+                                sessionIds.Contains(
+                                    turn.SessionId))
+                            .ToArray();
+
+                    return new AgentRoleTelemetrySummary(
+                        role,
+                        roleSessions.Length,
+                        roleTurns.Length,
+                        roleTurns.Sum(
+                            turn => turn.InputTokens),
+                        roleTurns.Sum(
+                            turn => turn.CachedInputTokens),
+                        roleTurns.Sum(
+                            turn => turn.CacheWriteInputTokens),
+                        roleTurns.Sum(
+                            turn => turn.OutputTokens),
+                        roleTurns.Sum(
+                            turn => turn.ReasoningOutputTokens),
+                        roleTurns.Sum(
+                            turn => turn.TotalTokens));
+                })
+                .ToArray();
+
+        return new MissionTelemetrySummary(
+            sessions.Count,
+            sessions.Count(
+                session =>
+                    session.Status ==
+                        AgentSessionStatus.Active),
+            sessions.Count(
+                session =>
+                    session.Status ==
+                        AgentSessionStatus.Invalidated),
+            turns.Count,
+            recoveryCycles.Count,
+            recoveryCycles.Count(
+                cycle =>
+                    cycle.Status ==
+                        RecoveryCycleStatus.Succeeded),
+            recoveryCycles.Count(
+                cycle =>
+                    cycle.Status ==
+                        RecoveryCycleStatus.Exhausted),
+            turns.Count(
+                turn =>
+                    turn.Purpose ==
+                        AgentTurnPurpose.Work &&
+                    turn.TurnNumber > 1),
+            turns.Count(
+                turn =>
+                    turn.Purpose ==
+                        AgentTurnPurpose.Work &&
+                    turn.ContextReuseRecommended ==
+                        true),
+            turns.Sum(
+                turn => turn.InputTokens),
+            turns.Sum(
+                turn => turn.CachedInputTokens),
+            turns.Sum(
+                turn => turn.CacheWriteInputTokens),
+            turns.Sum(
+                turn => turn.OutputTokens),
+            turns.Sum(
+                turn => turn.ReasoningOutputTokens),
+            turns.Sum(
+                turn => turn.TotalTokens),
+            roleSummaries);
     }
 
     private static WorkerResponse Error(
