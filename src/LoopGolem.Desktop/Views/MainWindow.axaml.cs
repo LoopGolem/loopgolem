@@ -329,7 +329,10 @@ public partial class MainWindow : Window
                 MissionResultText.Text = mission.Error;
             }
 
-            if (mission.Status is MissionStatus.Completed or MissionStatus.Failed)
+            if (mission.Status is
+                MissionStatus.Completed or
+                MissionStatus.Failed or
+                MissionStatus.NeedsHumanAttention)
             {
                 _activeMissionId = null;
                 return;
@@ -396,6 +399,7 @@ public partial class MainWindow : Window
             MissionTaskKind.InspectWorkspace => "TaskInspectWorkspace",
             MissionTaskKind.DiscoverProjects => "TaskDiscoverProjects",
             MissionTaskKind.PlanMission => "TaskPlanMission",
+            MissionTaskKind.ValidateMission => "TaskValidateMission",
             MissionTaskKind.AgentWork => "TaskAgentWork",
             MissionTaskKind.InspectGitChanges => "TaskInspectGitChanges",
             MissionTaskKind.BuildDotNet => "TaskBuildDotNet",
@@ -459,6 +463,7 @@ public partial class MainWindow : Window
             MissionStatus.WaitingForQuota => "WaitingForQuota",
             MissionStatus.WaitingForApproval => "WaitingForApproval",
             MissionStatus.Paused => "Paused",
+            MissionStatus.NeedsHumanAttention => "NeedsHumanAttention",
             MissionStatus.Failed => "Failed",
             MissionStatus.Completed => "Completed",
             _ => "Status"

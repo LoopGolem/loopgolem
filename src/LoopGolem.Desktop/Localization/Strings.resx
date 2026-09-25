@@ -58,4 +58,6 @@
   <data name="CodexAuthRequiredWsl" xml:space="preserve"><value>ChatGPT login required in WSL</value></data>
   <data name="CodexAuthRequired" xml:space="preserve"><value>ChatGPT login required</value></data>
 <data name="TaskPlanMission" xml:space="preserve"><value>Plan mission</value></data>
+  <data name="TaskValidateMission" xml:space="preserve"><value>Validate mission</value></data>
+  <data name="NeedsHumanAttention" xml:space="preserve"><value>Needs human attention</value></data>
 </root>

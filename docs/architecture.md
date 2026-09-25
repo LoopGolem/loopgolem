@@ -5,21 +5,35 @@ LoopGolem is a persistent orchestrator rather than a long-lived chat process.
 ## Components
 
 - **LoopGolem.Core**: provider-independent mission, task, quota, protocol and policy concepts.
-- **LoopGolem.Orchestrator**: state transitions, routing, retry/escalation, verification and checkpoint rules.
-- **LoopGolem.Worker**: background mission execution, persistence and local IPC; restartable independently of the UI.
+- **LoopGolem.Orchestrator**: state transitions, dependency scheduling, retry policy, validation cycles and completion rules.
+- **LoopGolem.Worker**: background mission execution, SQLite persistence, Codex integration, local verification and IPC; restartable independently of the UI.
 - **LoopGolem.Desktop**: Avalonia Windows/Linux client; product logic does not belong here.
 - **LoopGolem.Cli**: automation and power-user surface over the same worker contracts.
 
 ## Planner-driven mission flow
 
-The planner-driven pipeline is the current execution architecture. The worker registers deterministic workspace inspection and project discovery, Codex planning, deterministic operations, bounded Luna Low microtasks, and deterministic Git/build verification executors. The orchestrator owns task sequencing and state transitions; provider calls remain behind worker-side adapters.
+The current Codex execution architecture follows the principle: expensive intelligence decides; cheap intelligence executes; deterministic software verifies.
 
-1. A mission is created with a goal and workspace, and its initial deterministic tasks inspect the workspace and discover project structure.
-2. The worker persists mission/task state, then the orchestrator advances the mission to Planning and invokes Codex Planning High in read-only mode.
-3. The planner returns a structured multi-task plan. The worker validates it before the orchestrator adds its tasks to the mission.
-4. Planned tasks run in dependency order. Exact mechanical work uses deterministic operations; tasks requiring implementation judgment use bounded Luna Low microtasks with explicit read/write paths and acceptance checks.
-5. Deterministic Git change checks and build verification run as planned tasks. Their results and mission state are persisted.
-6. On worker startup, pending Created/Planning/Running missions are recovered and resumed from persisted state.
+1. A mission starts with deterministic workspace inspection and project discovery.
+2. GPT-6 Luna High runs as a read-only planner. It can inspect the repository and returns a structured dependency graph of small tasks.
+3. Exact mechanical work uses local deterministic operations such as `write_file`, `create_directory`, `rename_path` and direct `run_command` execution.
+4. Tasks requiring implementation judgment run as fresh GPT-6 Luna Low workers. Each worker receives only its bounded prompt, explicit read files, explicit write allowlist and acceptance checks.
+5. LoopGolem verifies that a Luna Low worker did not change files outside its write allowlist.
+6. After a task batch, LoopGolem runs deterministic Git inspection and the available local .NET build verification.
+7. LoopGolem creates an **unreachable Git snapshot commit** from the working tree using a temporary index. The user's branch, index and HEAD are not moved.
+8. GPT-6 Luna High runs again as a read-only validator. It receives the original user goal, original plan, base commit and snapshot commit, and validates the actual diff.
+9. If validation returns `ok`, the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
+10. Corrections are executed and validated again. After three validator cycles without approval, the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
+
+## Git snapshots
+
+Validation snapshots are Git commit objects created with a temporary alternate index. They are intentionally unreachable: no branch or tag is updated. Git may garbage-collect these objects later.
+
+This gives the validator an immutable `baseCommit..snapshotCommit` diff while leaving the user's working branch untouched.
+
+## Self-hosting rule
+
+A running Worker does not hot-reload changes made to LoopGolem itself. If a mission modifies `LoopGolem.Core`, `LoopGolem.Orchestrator` or `LoopGolem.Worker`, later tasks in that same mission must not assume that new runtime behavior is already active in the current Worker process. Newly built child processes may be used for build/self-test verification, but the orchestrator keeps running the binary with which it started.
 
 ## Persistence
 
@@ -28,12 +42,21 @@ The worker owns the SQLite database.
 - Windows: `%LOCALAPPDATA%\LoopGolem\loopgolem.db`
 - Linux: `$XDG_STATE_HOME/loopgolem/loopgolem.db` or `~/.local/state/loopgolem/loopgolem.db`
 
-SQLite uses WAL mode. UI clients do not open the database directly.
+SQLite uses WAL mode. UI clients do not open the database directly. Planner tasks, expanded microtask definitions, validator tasks and correction cycles are persisted so recovery remains possible across Worker restarts.
 
 ## IPC
 
-Desktop and CLI clients communicate with the worker through the local named pipe `loopgolem-worker-v1`. The current protocol is newline-delimited JSON with request/response framing. Named pipes keep the first slice dependency-light and cross-platform.
+Desktop and CLI clients communicate with the worker through the local named pipe `loopgolem-worker-v1`. The protocol is newline-delimited JSON with request/response framing. Client disconnects are transport conditions; they do not stop an in-progress Worker mission.
 
 ## Provider and policy boundaries
 
-Codex planning and Luna Low execution are provider-backed worker services. Mission, task, quota, protocol, and policy concepts remain provider-independent in Core, and persisted mission semantics do not depend on a particular provider. Provider credentials must not be injected into prompts. Planning, execution, and escalation are separate concerns; orchestrator policy controls expensive-model escalation. Quota exhaustion is a wait state, and the system does not automatically purchase credits or silently fall back to paid API usage.
+Codex calls remain worker-side adapters. Mission, task, quota, protocol and policy concepts remain provider-independent in Core.
+
+The current model policy is intentionally bounded:
+
+- GPT-6 Luna High: planning and final validation.
+- GPT-6 Luna Low: bounded implementation microtasks.
+- Deterministic executor: exact work and local verification with zero model tokens.
+- Human attention: the escalation target when Luna High cannot close the mission safely.
+
+LoopGolem does not automatically use Sol, Astra or any model above Luna High. Provider credentials are never injected into prompts. Quota exhaustion is a wait state, and LoopGolem never automatically purchases credits or silently falls back to paid API usage.
