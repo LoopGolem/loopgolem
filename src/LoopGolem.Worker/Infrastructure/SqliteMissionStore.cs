@@ -350,40 +350,8 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
-            INSERT INTO mission_task_attempts (
-                id, mission_id, task_id, attempt_number, outcome, failure_kind,
-                summary, evidence_json, started_utc, completed_utc)
-            VALUES (
-                $id, $missionId, $taskId, $attemptNumber, $outcome, $failureKind,
-                $summary, $evidenceJson, $startedUtc, $completedUtc)
-            ON CONFLICT(id) DO UPDATE SET
-                mission_id = excluded.mission_id,
-                task_id = excluded.task_id,
-                attempt_number = excluded.attempt_number,
-                outcome = excluded.outcome,
-                failure_kind = excluded.failure_kind,
-                summary = excluded.summary,
-                evidence_json = excluded.evidence_json,
-                started_utc = excluded.started_utc,
-                completed_utc = excluded.completed_utc;
-            """;
-
-        command.Parameters.AddWithValue("$id", attempt.Id);
-        command.Parameters.AddWithValue("$missionId", attempt.MissionId);
-        command.Parameters.AddWithValue("$taskId", attempt.TaskId);
-        command.Parameters.AddWithValue("$attemptNumber", attempt.AttemptNumber);
-        command.Parameters.AddWithValue("$outcome", attempt.Outcome.ToString());
-        command.Parameters.AddWithValue("$failureKind", attempt.FailureKind.ToString());
-        command.Parameters.AddWithValue("$summary", (object?)attempt.Summary ?? DBNull.Value);
-        command.Parameters.AddWithValue("$evidenceJson", (object?)attempt.EvidenceJson ?? DBNull.Value);
-        command.Parameters.AddWithValue("$startedUtc", FormatTimestamp(attempt.StartedAtUtc));
-        command.Parameters.AddWithValue(
-            "$completedUtc",
-            attempt.CompletedAtUtc is { } completed
-                ? FormatTimestamp(completed)
-                : DBNull.Value);
-
+        command.CommandText = TaskAttemptUpsertSql;
+        AddTaskAttemptParameters(command, attempt);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -655,6 +623,71 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         return turns;
     }
 
+    public async Task UpdateExecutionStateAsync(
+        MissionSnapshot snapshot,
+        MissionTaskAttempt? attempt = null,
+        IReadOnlyList<RecoveryEpisode>? recoveryEpisodes = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var missionCommand = connection.CreateCommand())
+        {
+            missionCommand.Transaction = (SqliteTransaction)transaction;
+            missionCommand.CommandText = """
+                UPDATE missions SET
+                    goal = $goal,
+                    workspace_path = $workspacePath,
+                    execution_mode = $executionMode,
+                    policy_json = $policyJson,
+                    capability_snapshot_json = $capabilitySnapshotJson,
+                    status = $status,
+                    result = $result,
+                    error = $error,
+                    created_utc = $createdUtc,
+                    updated_utc = $updatedUtc
+                WHERE id = $id;
+                """;
+            AddMissionParameters(missionCommand, snapshot.Mission);
+            await missionCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var task in snapshot.Tasks.OrderBy(task => task.Sequence))
+        {
+            await UpsertTaskAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                task,
+                cancellationToken);
+        }
+
+        if (attempt is not null)
+        {
+            await using var attemptCommand = connection.CreateCommand();
+            attemptCommand.Transaction = (SqliteTransaction)transaction;
+            attemptCommand.CommandText = TaskAttemptUpsertSql;
+            AddTaskAttemptParameters(attemptCommand, attempt);
+            await attemptCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (recoveryEpisodes is not null)
+        {
+            foreach (var episode in recoveryEpisodes)
+            {
+                await using var recoveryCommand = connection.CreateCommand();
+                recoveryCommand.Transaction = (SqliteTransaction)transaction;
+                recoveryCommand.CommandText = RecoveryEpisodeUpsertSql;
+                AddRecoveryEpisodeParameters(
+                    recoveryCommand,
+                    episode);
+                await recoveryCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task UpdateWithRecoveryEpisodeAsync(
         MissionSnapshot snapshot,
         RecoveryEpisode episode,
@@ -697,27 +730,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         await using (var recoveryCommand = connection.CreateCommand())
         {
             recoveryCommand.Transaction = (SqliteTransaction)transaction;
-            recoveryCommand.CommandText = """
-                INSERT INTO recovery_episodes (
-                    id, mission_id, failed_task_id, cycle, status, failed_attempt_id,
-                    recovery_turn_id, repair_task_ids_json, failure_evidence_json,
-                    created_utc, updated_utc)
-                VALUES (
-                    $id, $missionId, $failedTaskId, $cycle, $status, $failedAttemptId,
-                    $recoveryTurnId, $repairTaskIdsJson, $failureEvidenceJson,
-                    $createdUtc, $updatedUtc)
-                ON CONFLICT(id) DO UPDATE SET
-                    mission_id = excluded.mission_id,
-                    failed_task_id = excluded.failed_task_id,
-                    cycle = excluded.cycle,
-                    status = excluded.status,
-                    failed_attempt_id = excluded.failed_attempt_id,
-                    recovery_turn_id = excluded.recovery_turn_id,
-                    repair_task_ids_json = excluded.repair_task_ids_json,
-                    failure_evidence_json = excluded.failure_evidence_json,
-                    created_utc = excluded.created_utc,
-                    updated_utc = excluded.updated_utc;
-                """;
+            recoveryCommand.CommandText = RecoveryEpisodeUpsertSql;
 
             AddRecoveryEpisodeParameters(
                 recoveryCommand,
@@ -735,32 +748,8 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
-            INSERT INTO recovery_episodes (
-                id, mission_id, failed_task_id, cycle, status, failed_attempt_id,
-                recovery_turn_id, repair_task_ids_json, failure_evidence_json,
-                created_utc, updated_utc)
-            VALUES (
-                $id, $missionId, $failedTaskId, $cycle, $status, $failedAttemptId,
-                $recoveryTurnId, $repairTaskIdsJson, $failureEvidenceJson,
-                $createdUtc, $updatedUtc)
-            ON CONFLICT(id) DO UPDATE SET
-                mission_id = excluded.mission_id,
-                failed_task_id = excluded.failed_task_id,
-                cycle = excluded.cycle,
-                status = excluded.status,
-                failed_attempt_id = excluded.failed_attempt_id,
-                recovery_turn_id = excluded.recovery_turn_id,
-                repair_task_ids_json = excluded.repair_task_ids_json,
-                failure_evidence_json = excluded.failure_evidence_json,
-                created_utc = excluded.created_utc,
-                updated_utc = excluded.updated_utc;
-            """;
-
-        AddRecoveryEpisodeParameters(
-            command,
-            episode);
-
+        command.CommandText = RecoveryEpisodeUpsertSql;
+        AddRecoveryEpisodeParameters(command, episode);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -800,6 +789,69 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         }
 
         return episodes;
+    }
+
+    private const string TaskAttemptUpsertSql =
+        """
+        INSERT INTO mission_task_attempts (
+            id, mission_id, task_id, attempt_number, outcome, failure_kind,
+            summary, evidence_json, started_utc, completed_utc)
+        VALUES (
+            $id, $missionId, $taskId, $attemptNumber, $outcome, $failureKind,
+            $summary, $evidenceJson, $startedUtc, $completedUtc)
+        ON CONFLICT(id) DO UPDATE SET
+            mission_id = excluded.mission_id,
+            task_id = excluded.task_id,
+            attempt_number = excluded.attempt_number,
+            outcome = excluded.outcome,
+            failure_kind = excluded.failure_kind,
+            summary = excluded.summary,
+            evidence_json = excluded.evidence_json,
+            started_utc = excluded.started_utc,
+            completed_utc = excluded.completed_utc;
+        """;
+
+    private const string RecoveryEpisodeUpsertSql =
+        """
+        INSERT INTO recovery_episodes (
+            id, mission_id, failed_task_id, cycle, status, failed_attempt_id,
+            recovery_turn_id, repair_task_ids_json, failure_evidence_json,
+            created_utc, updated_utc)
+        VALUES (
+            $id, $missionId, $failedTaskId, $cycle, $status, $failedAttemptId,
+            $recoveryTurnId, $repairTaskIdsJson, $failureEvidenceJson,
+            $createdUtc, $updatedUtc)
+        ON CONFLICT(id) DO UPDATE SET
+            mission_id = excluded.mission_id,
+            failed_task_id = excluded.failed_task_id,
+            cycle = excluded.cycle,
+            status = excluded.status,
+            failed_attempt_id = excluded.failed_attempt_id,
+            recovery_turn_id = excluded.recovery_turn_id,
+            repair_task_ids_json = excluded.repair_task_ids_json,
+            failure_evidence_json = excluded.failure_evidence_json,
+            created_utc = excluded.created_utc,
+            updated_utc = excluded.updated_utc;
+        """;
+
+    private static void AddTaskAttemptParameters(
+        SqliteCommand command,
+        MissionTaskAttempt attempt)
+    {
+        command.Parameters.AddWithValue("$id", attempt.Id);
+        command.Parameters.AddWithValue("$missionId", attempt.MissionId);
+        command.Parameters.AddWithValue("$taskId", attempt.TaskId);
+        command.Parameters.AddWithValue("$attemptNumber", attempt.AttemptNumber);
+        command.Parameters.AddWithValue("$outcome", attempt.Outcome.ToString());
+        command.Parameters.AddWithValue("$failureKind", attempt.FailureKind.ToString());
+        command.Parameters.AddWithValue("$summary", (object?)attempt.Summary ?? DBNull.Value);
+        command.Parameters.AddWithValue("$evidenceJson", (object?)attempt.EvidenceJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$startedUtc", FormatTimestamp(attempt.StartedAtUtc));
+        command.Parameters.AddWithValue(
+            "$completedUtc",
+            attempt.CompletedAtUtc is { } completed
+                ? FormatTimestamp(completed)
+                : DBNull.Value);
     }
 
     private static void AddRecoveryEpisodeParameters(
