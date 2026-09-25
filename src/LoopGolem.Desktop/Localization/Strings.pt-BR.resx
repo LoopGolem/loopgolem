@@ -62,4 +62,24 @@
   <data name="NeedsHumanAttention" xml:space="preserve"><value>Precisa de atenção humana</value></data>
   <data name="Tokens" xml:space="preserve"><value>tokens</value></data>
   <data name="TotalTokens" xml:space="preserve"><value>Total de tokens</value></data>
+  <data name="RecoveryPending" xml:space="preserve"><value>Recuperação pendente</value></data>
+  <data name="Telemetry" xml:space="preserve"><value>Telemetria da missão</value></data>
+  <data name="InputTokens" xml:space="preserve"><value>entrada</value></data>
+  <data name="CachedInputTokens" xml:space="preserve"><value>em cache</value></data>
+  <data name="CacheWriteInputTokens" xml:space="preserve"><value>gravação de cache</value></data>
+  <data name="OutputTokens" xml:space="preserve"><value>saída</value></data>
+  <data name="ReasoningTokens" xml:space="preserve"><value>raciocínio</value></data>
+  <data name="Sessions" xml:space="preserve"><value>Sessões</value></data>
+  <data name="Active" xml:space="preserve"><value>ativas</value></data>
+  <data name="Invalidated" xml:space="preserve"><value>invalidadas</value></data>
+  <data name="Turns" xml:space="preserve"><value>Turnos</value></data>
+  <data name="WorkerReuse" xml:space="preserve"><value>Reuso de Worker</value></data>
+  <data name="ResumedTurns" xml:space="preserve"><value>turnos retomados</value></data>
+  <data name="ReuseHints" xml:space="preserve"><value>hints de reuso</value></data>
+  <data name="RecoveryCycles" xml:space="preserve"><value>Ciclos de recuperação</value></data>
+  <data name="Successful" xml:space="preserve"><value>bem-sucedidos</value></data>
+  <data name="Exhausted" xml:space="preserve"><value>esgotados</value></data>
+  <data name="ByRole" xml:space="preserve"><value>Por função</value></data>
+  <data name="Supervisor" xml:space="preserve"><value>Supervisor</value></data>
+  <data name="Validator" xml:space="preserve"><value>Validador</value></data>
 </root>
