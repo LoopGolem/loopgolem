@@ -50,6 +50,12 @@ public interface IMissionStore
         RecoveryEpisode episode,
         CancellationToken cancellationToken = default);
 
+    Task UpdateExecutionStateAsync(
+        MissionSnapshot snapshot,
+        MissionTaskAttempt? attempt = null,
+        IReadOnlyList<RecoveryEpisode>? recoveryEpisodes = null,
+        CancellationToken cancellationToken = default);
+
     Task SaveRecoveryEpisodeAsync(
         RecoveryEpisode episode,
         CancellationToken cancellationToken = default);
