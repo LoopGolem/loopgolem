@@ -12,4 +12,7 @@ public sealed record MissionTask(
     string? ResultDetails,
     string? Error,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc)
+{
+    public string? ExecutionContext { get; init; }
+}
