@@ -281,11 +281,17 @@ internal static class SelfTest
                 [telemetryTask.Id],
                 telemetryNow,
                 telemetryNow);
+            var capabilitySnapshot =
+                CreateTestCapabilitySnapshot(
+                    created.Mission.Id,
+                    telemetryNow);
 
             await store.UpsertTaskAttemptAsync(attempt);
             await store.UpsertAgentSessionAsync(session);
             await store.UpsertAgentTurnAsync(turn);
             await store.UpsertRecoveryCycleAsync(recoveryCycle);
+            await store.UpsertCapabilitySnapshotAsync(
+                capabilitySnapshot);
 
             var completed = await orchestrator.RunMissionAsync(
                 created.Mission.Id);
@@ -351,6 +357,9 @@ internal static class SelfTest
             var persistedRecoveryCycles =
                 await reopened.ListRecoveryCyclesAsync(
                     created.Mission.Id);
+            var persistedCapabilities =
+                await reopened.GetCapabilitySnapshotAsync(
+                    created.Mission.Id);
 
             if (persisted is null ||
                 persisted.Mission.Policy != created.Mission.Policy ||
@@ -386,10 +395,17 @@ internal static class SelfTest
                 persistedRecoveryCycles[0].CreatedAtUtc != recoveryCycle.CreatedAtUtc ||
                 persistedRecoveryCycles[0].UpdatedAtUtc != recoveryCycle.UpdatedAtUtc ||
                 !persistedRecoveryCycles[0].RepairTaskIds.SequenceEqual(
-                    recoveryCycle.RepairTaskIds))
+                    recoveryCycle.RepairTaskIds) ||
+                persistedCapabilities is null ||
+                JsonSerializer.Serialize(
+                    persistedCapabilities,
+                    JsonOptions) !=
+                JsonSerializer.Serialize(
+                    capabilitySnapshot,
+                    JsonOptions))
             {
                 Console.Error.WriteLine(
-                    "Self-test did not round-trip orchestration telemetry.");
+                    "Self-test did not round-trip orchestration telemetry/capabilities.");
                 return 1;
             }
 
@@ -1365,6 +1381,44 @@ internal static class SelfTest
     private const string PreparedRecoveryContext =
         "self-test-persisted-baseline";
 
+    private static MissionCapabilitySnapshot
+        CreateTestCapabilitySnapshot(
+            string missionId,
+            DateTimeOffset capturedAtUtc) =>
+        new(
+            missionId,
+            new ExecutionEnvironmentCapabilities(
+                "wsl",
+                "linux",
+                "SelfTestLinux",
+                [
+                    new ToolCapability(
+                        "git",
+                        true,
+                        "git version self-test"),
+                    new ToolCapability(
+                        "dotnet",
+                        false,
+                        null)
+                ]),
+            new ExecutionEnvironmentCapabilities(
+                "host",
+                OperatingSystem.IsWindows()
+                    ? "windows"
+                    : "linux",
+                null,
+                [
+                    new ToolCapability(
+                        "git",
+                        true,
+                        "git version self-test"),
+                    new ToolCapability(
+                        "dotnet",
+                        true,
+                        "10.0.self-test")
+                ]),
+            capturedAtUtc);
+
     private static bool VerifySelfHostingPrompts(
         string workspace,
         string baseCommit,
@@ -1381,9 +1435,15 @@ internal static class SelfTest
             null,
             now,
             now);
+        var capabilities =
+            CreateTestCapabilitySnapshot(
+                mission.Id,
+                now);
 
         var plannerPrompt =
-            CodexPlanningService.BuildPlannerPrompt(mission);
+            CodexPlanningService.BuildPlannerPrompt(
+                mission,
+                capabilities);
         var validatorPrompt =
             CodexPlanningService.BuildValidatorPrompt(
                 mission,
@@ -1392,17 +1452,77 @@ internal static class SelfTest
                     plan,
                     [],
                     1),
-                "self-test-snapshot");
+                "self-test-snapshot",
+                capabilities);
+        var workerPrompt =
+            CodexPlanningService.BuildWorkerPrompt(
+                new PlannedTask(
+                    "capability-worker",
+                    "Respect agent capabilities",
+                    PlannedExecutorKinds.LunaLow,
+                    "Make a small implementation change.",
+                    ["README.md"],
+                    ["README.md"],
+                    ["dotnet build"],
+                    [],
+                    new DeterministicOperation(
+                        DeterministicOperationKinds.None,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        string.Empty,
+                        30)),
+                capabilities);
+
+        var prompts =
+            new[]
+            {
+                plannerPrompt,
+                validatorPrompt,
+                workerPrompt
+            };
 
         if (!plannerPrompt.Contains(
                 CodexPlanningService.SelfHostingRule,
                 StringComparison.Ordinal) ||
             !validatorPrompt.Contains(
                 CodexPlanningService.SelfHostingRule,
+                StringComparison.Ordinal) ||
+            prompts.Any(
+                prompt =>
+                    !prompt.Contains(
+                        "AGENT ENVIRONMENT",
+                        StringComparison.Ordinal) ||
+                    !prompt.Contains(
+                        "DETERMINISTIC HOST ENVIRONMENT",
+                        StringComparison.Ordinal) ||
+                    !prompt.Contains(
+                        "- dotnet: UNAVAILABLE",
+                        StringComparison.Ordinal) ||
+                    !prompt.Contains(
+                        "- dotnet: available (10.0.self-test)",
+                        StringComparison.Ordinal)))
+        {
+            Console.Error.WriteLine(
+                "Self-test Codex prompts are missing self-hosting or environment capability policy.");
+            return false;
+        }
+
+        if (!plannerPrompt.Contains(
+                "Never ask Luna Low to execute a probed tool marked UNAVAILABLE",
+                StringComparison.Ordinal) ||
+            !workerPrompt.Contains(
+                "Do not attempt a probed tool marked UNAVAILABLE",
+                StringComparison.Ordinal) ||
+            !validatorPrompt.Contains(
+                "Do not attempt a probed tool marked UNAVAILABLE",
                 StringComparison.Ordinal))
         {
             Console.Error.WriteLine(
-                "Self-test self-hosting policy is missing from a Codex prompt.");
+                "Self-test Codex prompts do not enforce agent/host capability boundaries.");
             return false;
         }
 

@@ -20,11 +20,16 @@ var codexTransport =
         processRunner,
         codex,
         store);
+var capabilityService =
+    new EnvironmentCapabilityService(
+        processRunner,
+        store);
 var planning =
     new CodexPlanningService(
         processRunner,
         codex,
-        codexTransport);
+        codexTransport,
+        capabilityService);
 
 IMissionTaskExecutor[] executors =
 [
