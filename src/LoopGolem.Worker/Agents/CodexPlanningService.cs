@@ -311,19 +311,32 @@ public sealed class CodexPlanningService(
             return runtimeError;
         }
 
-        GitWorkspaceSnapshot before;
-        try
-        {
-            before = await GitWorkspaceSnapshot.CaptureAsync(
-                processRunner,
-                mission.WorkspacePath,
-                cancellationToken);
-        }
-        catch (Exception exception)
+        if (string.IsNullOrWhiteSpace(task.ExecutionContext))
         {
             return TaskExecutionResult.Failed(
-                "Could not capture the workspace before the microtask.",
+                "Luna Low execution baseline is missing.",
+                "The task was not prepared for crash-safe execution.");
+        }
+
+        GitWorkspaceSnapshot? before;
+        try
+        {
+            before = JsonSerializer.Deserialize<GitWorkspaceSnapshot>(
+                task.ExecutionContext,
+                JsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            return TaskExecutionResult.Failed(
+                "Luna Low execution baseline is invalid.",
                 exception.Message);
+        }
+
+        if (before is null)
+        {
+            return TaskExecutionResult.Failed(
+                "Luna Low execution baseline is empty.",
+                "The persisted workspace snapshot could not be restored.");
         }
 
         var run = await RunStructuredAsync(
@@ -431,7 +444,9 @@ public sealed class CodexPlanningService(
             "changed" => TaskExecutionResult.Succeeded(
                 outcome.Summary,
                 run.Details),
-            "already_satisfied" when changedByTask.Count > 0 =>
+            "already_satisfied"
+                when changedByTask.Count > 0 &&
+                     task.Status != LoopGolem.Core.Domain.TaskStatus.Retrying =>
                 TaskExecutionResult.Failed(
                     "Luna Low reported no edit was needed, but files changed.",
                     string.Join(", ", changedByTask),
