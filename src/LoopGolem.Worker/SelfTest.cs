@@ -961,8 +961,21 @@ internal static class SelfTest
         var firstSessionId =
             planning.SessionId;
 
+        // Simulate a Worker restart: reopen SQLite and rebuild the
+        // Supervisor/transport services from persisted state only.
+        var reopenedStore =
+            new SqliteMissionStore(database);
+        await reopenedStore.InitializeAsync();
+        var restartedTransport =
+            new FakeSupervisorTransport(
+                reopenedStore);
+        var restartedSupervisor =
+            new CodexSupervisorSessionService(
+                restartedTransport,
+                reopenedStore);
+
         var firstRecovery =
-            await supervisor.RunRecoveryAsync(
+            await restartedSupervisor.RunRecoveryAsync(
                 mission,
                 task.Id,
                 "gpt-6-luna",
@@ -970,23 +983,23 @@ internal static class SelfTest
                 "{}",
                 "Diagnose the deterministic failure.");
 
-        if (fakeTransport.Requests.Count != 2 ||
-            fakeTransport.Requests[1].SessionMode !=
+        if (restartedTransport.Requests.Count != 1 ||
+            restartedTransport.Requests[0].SessionMode !=
                 CodexSessionMode.Resume ||
-            fakeTransport.Requests[1].SessionId !=
+            restartedTransport.Requests[0].SessionId !=
                 firstSessionId ||
             firstRecovery.SessionId !=
                 firstSessionId)
         {
             Console.Error.WriteLine(
-                "Self-test recovery did not resume the planning Supervisor.");
+                "Self-test recovery did not resume the persisted planning Supervisor after restart.");
             return false;
         }
 
-        fakeTransport.FailNextResumeAsMissing = true;
+        restartedTransport.FailNextResumeAsMissing = true;
 
         var resetRecovery =
-            await supervisor.RunRecoveryAsync(
+            await restartedSupervisor.RunRecoveryAsync(
                 mission,
                 task.Id,
                 "gpt-6-luna",
@@ -994,27 +1007,27 @@ internal static class SelfTest
                 "{}",
                 "Diagnose the deterministic failure after restart.");
 
-        if (fakeTransport.Requests.Count != 4 ||
-            fakeTransport.Requests[2].SessionMode !=
+        if (restartedTransport.Requests.Count != 3 ||
+            restartedTransport.Requests[1].SessionMode !=
                 CodexSessionMode.Resume ||
-            fakeTransport.Requests[2].SessionId !=
+            restartedTransport.Requests[1].SessionId !=
                 firstSessionId ||
-            fakeTransport.Requests[3].SessionMode !=
+            restartedTransport.Requests[2].SessionMode !=
                 CodexSessionMode.NewPersistent ||
-            fakeTransport.Requests[3].Purpose !=
+            restartedTransport.Requests[2].Purpose !=
                 AgentTurnPurpose.Recovery ||
             resetRecovery.SessionId ==
                 firstSessionId ||
-            !fakeTransport.Requests[3].Prompt.Contains(
+            !restartedTransport.Requests[2].Prompt.Contains(
                 "SUPERVISOR SESSION RESET",
                 StringComparison.Ordinal) ||
-            !fakeTransport.Requests[3].Prompt.Contains(
+            !restartedTransport.Requests[2].Prompt.Contains(
                 mission.Goal,
                 StringComparison.Ordinal) ||
-            !fakeTransport.Requests[3].Prompt.Contains(
+            !restartedTransport.Requests[2].Prompt.Contains(
                 task.Title,
                 StringComparison.Ordinal) ||
-            !fakeTransport.Requests[3].Prompt.Contains(
+            !restartedTransport.Requests[2].Prompt.Contains(
                 "AGENT ENVIRONMENT",
                 StringComparison.OrdinalIgnoreCase))
         {
@@ -1024,7 +1037,7 @@ internal static class SelfTest
         }
 
         var sessions =
-            await store.ListAgentSessionsAsync(
+            await reopenedStore.ListAgentSessionsAsync(
                 missionId);
         var oldSession =
             sessions.SingleOrDefault(
