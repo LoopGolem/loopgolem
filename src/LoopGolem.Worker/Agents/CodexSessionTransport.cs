@@ -324,6 +324,15 @@ public sealed class CodexSessionTransport(
             await store.ListAgentTurnsAsync(
                 missionId,
                 cancellationToken);
+        return GetNextTurnNumber(
+            session,
+            turns);
+    }
+
+    internal static int GetNextTurnNumber(
+        AgentSession session,
+        IEnumerable<AgentTurn> turns)
+    {
         var highestPersisted =
             turns
                 .Where(turn =>
