@@ -60,4 +60,6 @@
 <data name="TaskPlanMission" xml:space="preserve"><value>Planejar missão</value></data>
   <data name="TaskValidateMission" xml:space="preserve"><value>Validar missão</value></data>
   <data name="NeedsHumanAttention" xml:space="preserve"><value>Precisa de atenção humana</value></data>
+  <data name="Tokens" xml:space="preserve"><value>tokens</value></data>
+  <data name="TotalTokens" xml:space="preserve"><value>Total de tokens</value></data>
 </root>
