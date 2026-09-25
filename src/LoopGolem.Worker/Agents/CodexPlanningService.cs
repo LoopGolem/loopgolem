@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
+using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Infrastructure;
 
 namespace LoopGolem.Worker.Agents;
