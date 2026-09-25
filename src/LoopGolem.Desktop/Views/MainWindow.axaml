@@ -11,7 +11,7 @@
       HorizontalScrollBarVisibility="Disabled">
     <Grid
         Margin="28"
-        RowDefinitions="Auto,18,Auto,18,Auto,16,Auto,8,Auto,18,Auto,12,Auto,12,Auto">
+        RowDefinitions="Auto,18,Auto,18,Auto,16,Auto,8,Auto,18,Auto,12,Auto,12,Auto,12,Auto">
       <StackPanel Grid.Row="0" Spacing="4">
         <TextBlock x:Name="TitleText" FontSize="30" FontWeight="SemiBold" />
         <TextBlock x:Name="SubtitleText" Opacity="0.72" TextWrapping="Wrap" />
@@ -93,6 +93,22 @@
 
       <Border
           Grid.Row="14"
+          Padding="14"
+          BorderThickness="1"
+          CornerRadius="8">
+        <StackPanel Spacing="8">
+          <TextBlock
+              x:Name="TelemetryLabel"
+              FontSize="16"
+              FontWeight="SemiBold" />
+          <TextBlock
+              x:Name="TelemetryText"
+              TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+
+      <Border
+          Grid.Row="16"
           Padding="14"
           BorderThickness="1"
           CornerRadius="8">
