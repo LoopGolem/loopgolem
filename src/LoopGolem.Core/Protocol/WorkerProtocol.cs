@@ -43,6 +43,35 @@ public sealed record CodexRuntimeStatus(
     string? Distribution = null,
     string? Model = null);
 
+public sealed record AgentRoleTelemetrySummary(
+    AgentSessionRole Role,
+    int Sessions,
+    int Turns,
+    long InputTokens,
+    long CachedInputTokens,
+    long CacheWriteInputTokens,
+    long OutputTokens,
+    long ReasoningOutputTokens,
+    long TotalTokens);
+
+public sealed record MissionTelemetrySummary(
+    int Sessions,
+    int ActiveSessions,
+    int InvalidatedSessions,
+    int Turns,
+    int RecoveryCycles,
+    int SuccessfulRecoveryCycles,
+    int ExhaustedRecoveryCycles,
+    int WorkerReusedTurns,
+    int WorkerReuseRecommendedTurns,
+    long InputTokens,
+    long CachedInputTokens,
+    long CacheWriteInputTokens,
+    long OutputTokens,
+    long ReasoningOutputTokens,
+    long TotalTokens,
+    IReadOnlyList<AgentRoleTelemetrySummary> Roles);
+
 public sealed record WorkerRequest(
     string Type,
     string? MissionId = null,
@@ -56,4 +85,5 @@ public sealed record WorkerResponse(
     string? ErrorCode = null,
     string? WorkerStatus = null,
     MissionSnapshot? Mission = null,
-    CodexRuntimeStatus? CodexStatus = null);
+    CodexRuntimeStatus? CodexStatus = null,
+    MissionTelemetrySummary? Telemetry = null);
