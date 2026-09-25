@@ -14,14 +14,33 @@ public sealed record ProcessRunResult(
 
 public sealed class ProcessRunner
 {
-    public async Task<ProcessRunResult> RunAsync(
+    public Task<ProcessRunResult> RunAsync(
         string fileName,
         IEnumerable<string> arguments,
         string workingDirectory,
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
         string? standardInput = null,
-        IReadOnlyDictionary<string, string>? environmentVariables = null)
+        IReadOnlyDictionary<string, string>? environmentVariables = null) =>
+        RunStreamingAsync(
+            fileName,
+            arguments,
+            workingDirectory,
+            timeout,
+            cancellationToken,
+            standardInput,
+            environmentVariables,
+            null);
+
+    public async Task<ProcessRunResult> RunStreamingAsync(
+        string fileName,
+        IEnumerable<string> arguments,
+        string workingDirectory,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default,
+        string? standardInput = null,
+        IReadOnlyDictionary<string, string>? environmentVariables = null,
+        Func<string, Task>? standardOutputLineHandler = null)
     {
         var argumentList = arguments.ToArray();
 
@@ -77,8 +96,17 @@ public sealed class ProcessRunner
             process.StandardInput.Close();
         }
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+
+        var stdoutTask = ReadLinesAsync(
+            process.StandardOutput,
+            stdout,
+            standardOutputLineHandler);
+        var stderrTask = ReadLinesAsync(
+            process.StandardError,
+            stderr,
+            null);
 
         var timedOut = false;
 
@@ -86,11 +114,22 @@ public sealed class ProcessRunner
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
 
+        var waitTask = process.WaitForExitAsync(timeoutSource.Token);
+
         try
         {
-            await process.WaitForExitAsync(timeoutSource.Token);
+            var first = await Task.WhenAny(waitTask, stdoutTask);
+            if (first == stdoutTask && stdoutTask.IsFaulted)
+            {
+                TryKillProcessTree(process);
+                await process.WaitForExitAsync(CancellationToken.None);
+                await stdoutTask;
+            }
+
+            await waitTask;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
         {
             timedOut = true;
             TryKillProcessTree(process);
@@ -101,9 +140,14 @@ public sealed class ProcessRunner
             TryKillProcessTree(process);
             throw;
         }
+        catch
+        {
+            TryKillProcessTree(process);
+            throw;
+        }
 
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        await stdoutTask;
+        await stderrTask;
 
         stopwatch.Stop();
 
@@ -113,8 +157,24 @@ public sealed class ProcessRunner
             process.HasExited ? process.ExitCode : -1,
             timedOut,
             stopwatch.ElapsedMilliseconds,
-            stdout,
-            stderr);
+            stdout.ToString(),
+            stderr.ToString());
+    }
+
+    private static async Task ReadLinesAsync(
+        StreamReader reader,
+        StringBuilder destination,
+        Func<string, Task>? lineHandler)
+    {
+        while (await reader.ReadLineAsync() is { } line)
+        {
+            destination.AppendLine(line);
+
+            if (lineHandler is not null)
+            {
+                await lineHandler(line);
+            }
+        }
     }
 
     private static void TryKillProcessTree(Process process)
