@@ -63,6 +63,14 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyGitSnapshotAsync(
+                    processRunner,
+                    workspace,
+                    baseCommit))
+            {
+                return 1;
+            }
+
             var store = new SqliteMissionStore(database);
             await store.InitializeAsync();
 
@@ -276,6 +284,94 @@ internal static class SelfTest
         return run.ExitCode == 0 && !run.TimedOut
             ? run.StandardOutput.Trim()
             : null;
+    }
+
+    private static async Task<bool> VerifyGitSnapshotAsync(
+        ProcessRunner processRunner,
+        string workspace,
+        string baseCommit)
+    {
+        var probePath = Path.Combine(
+            workspace,
+            "snapshot-probe.txt");
+
+        await File.WriteAllTextAsync(
+            probePath,
+            "snapshot only");
+
+        try
+        {
+            var snapshots =
+                new GitSnapshotService(processRunner);
+
+            var snapshotCommit =
+                await snapshots.CreateSnapshotCommitAsync(
+                    workspace,
+                    baseCommit,
+                    "self-test");
+
+            var diff = await processRunner.RunAsync(
+                "git",
+                [
+                    "diff",
+                    "--name-only",
+                    $"{baseCommit}..{snapshotCommit}",
+                    "--"
+                ],
+                workspace,
+                TimeSpan.FromSeconds(30));
+
+            if (diff.ExitCode != 0 ||
+                !diff.StandardOutput
+                    .Split(
+                        ['\r', '\n'],
+                        StringSplitOptions.RemoveEmptyEntries |
+                        StringSplitOptions.TrimEntries)
+                    .Contains(
+                        "snapshot-probe.txt",
+                        StringComparer.Ordinal))
+            {
+                Console.Error.WriteLine(
+                    "Self-test snapshot commit did not contain the working-tree probe.");
+                return false;
+            }
+
+            var currentHead = await GetHeadAsync(
+                processRunner,
+                workspace);
+
+            if (!string.Equals(
+                    currentHead,
+                    baseCommit,
+                    StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine(
+                    "Self-test snapshot moved the user's HEAD.");
+                return false;
+            }
+
+            var status = await processRunner.RunAsync(
+                "git",
+                ["status", "--short"],
+                workspace,
+                TimeSpan.FromSeconds(30));
+
+            if (status.ExitCode != 0 ||
+                !status.StandardOutput.Contains(
+                    "snapshot-probe.txt",
+                    StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine(
+                    "Self-test snapshot unexpectedly changed the real Git index/worktree state.");
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            File.Delete(probePath);
+        }
     }
 
     private static async Task<bool>
