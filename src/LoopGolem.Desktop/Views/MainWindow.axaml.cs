@@ -63,6 +63,8 @@ public partial class MainWindow : Window
         CodexLabel.Text = $"{LocalizationService.Get("Codex")}:";
         CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
         UseCodexCheckBox.Content = LocalizationService.Get("UseCodex");
+        ReuseLowContextCheckBox.Content =
+            LocalizationService.Get("ReuseLowContext");
         WorkspaceLabel.Text = LocalizationService.Get("Workspace");
         BrowseButton.Content = LocalizationService.Get("Browse");
         MissionGoalLabel.Text = LocalizationService.Get("MissionGoal");
@@ -178,10 +180,12 @@ public partial class MainWindow : Window
             status?.Message ?? LocalizationService.Get("CodexUnavailable"));
 
         UseCodexCheckBox.IsEnabled = _codexReady;
+        ReuseLowContextCheckBox.IsEnabled = _codexReady;
 
         if (!_codexReady)
         {
             UseCodexCheckBox.IsChecked = false;
+            ReuseLowContextCheckBox.IsEnabled = false;
         }
     }
 
@@ -246,7 +250,10 @@ public partial class MainWindow : Window
                 _workspacePath,
                 UseCodexCheckBox.IsChecked == true
                     ? MissionExecutionMode.Codex
-                    : MissionExecutionMode.ValidateOnly);
+                    : MissionExecutionMode.ValidateOnly,
+                ReuseLowContextCheckBox.IsChecked == true
+                    ? SessionReuseMode.Affinity
+                    : SessionReuseMode.Disabled);
         }
         catch
         {
