@@ -1950,12 +1950,12 @@ internal static class SelfTest
             {
                 FailNextResumeAsMissing = false;
 
-                var sessions =
+                var knownSessions =
                     await store.ListAgentSessionsAsync(
                         request.MissionId,
                         cancellationToken);
                 var expected =
-                    sessions.Single(
+                    knownSessions.Single(
                         candidate =>
                             candidate.Id ==
                             request.SessionId);
