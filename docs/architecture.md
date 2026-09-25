@@ -15,15 +15,16 @@ LoopGolem is a persistent orchestrator rather than a long-lived chat process.
 The current Codex execution architecture follows the principle: expensive intelligence decides; cheap intelligence executes; deterministic software verifies.
 
 1. A mission starts with deterministic workspace inspection and project discovery.
-2. GPT-6 Luna High runs as a read-only planner. It can inspect the repository and returns a structured dependency graph of small tasks.
-3. Exact mechanical work uses local deterministic operations such as `write_file`, `create_directory`, `rename_path` and direct `run_command` execution.
-4. Tasks requiring implementation judgment run as fresh GPT-6 Luna Low workers. Each worker receives only its bounded prompt, explicit read files, explicit write allowlist and acceptance checks.
-5. LoopGolem verifies that a Luna Low worker did not change files outside its write allowlist.
-6. After a task batch, LoopGolem runs deterministic Git inspection and the available local .NET build verification.
-7. LoopGolem creates an **unreachable Git snapshot commit** from the working tree using a temporary index. The user's branch, index and HEAD are not moved.
-8. GPT-6 Luna High runs again as a read-only validator. It receives the original user goal, original plan, base commit and snapshot commit, and validates the actual diff.
-9. If validation returns `ok`, the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
-10. Corrections are executed and validated again. After three validator cycles without approval, the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
+2. Before agent work, the Worker persists a capability snapshot that distinguishes the Codex agent environment from the deterministic host environment. The initial probe records `git` and `dotnet` availability/version in each environment and is reused after restart.
+3. GPT-6 Luna High runs as a read-only planner. It can inspect the repository, receives the capability snapshot, and returns a structured dependency graph of small tasks.
+4. Exact mechanical work uses local deterministic operations such as `write_file`, `create_directory`, `rename_path` and direct `run_command` execution on the host.
+5. Tasks requiring implementation judgment run as fresh GPT-6 Luna Low workers in the agent environment. Each worker receives its bounded prompt, explicit read files, explicit write allowlist, acceptance checks and the environment capability snapshot.
+6. LoopGolem verifies that a Luna Low worker did not change files outside its write allowlist.
+7. After a task batch, LoopGolem runs deterministic Git inspection and the available local .NET build verification.
+8. LoopGolem creates an **unreachable Git snapshot commit** from the working tree using a temporary index. The user's branch, index and HEAD are not moved.
+9. GPT-6 Luna High runs again as a read-only validator. It receives the original user goal, original plan, base commit, snapshot commit and the same persisted capability snapshot, and validates the actual diff.
+10. If validation returns `ok`, the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
+11. Corrections are executed and validated again. After three validator cycles without approval, the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
 
 ## Git snapshots
 
@@ -43,6 +44,8 @@ The worker owns the SQLite database.
 - Linux: `$XDG_STATE_HOME/loopgolem/loopgolem.db` or `~/.local/state/loopgolem/loopgolem.db`
 
 SQLite uses WAL mode. UI clients do not open the database directly. Planner tasks, expanded microtask definitions, validator tasks, correction cycles and mutable-task execution contexts are persisted so recovery remains possible across Worker restarts.
+
+Mission capability snapshots are stored separately from the mutable mission snapshot. This prevents normal orchestrator updates from overwriting adapter-level environment evidence and ensures a restarted Worker continues with the same agent/host capability assumptions.
 
 Each mission task has a persisted execution-attempt count, initialized to zero. The count increments before an executor is invoked, and increments again when a task in `Running` or `Retrying` is resumed after a Worker restart. SQLite schema migration adds this persisted state while preserving compatibility with existing databases.
 
