@@ -20,8 +20,10 @@ Task states: Planned, Ready, Running, Verifying, Retrying, Escalated, Blocked, F
 10. After three validation cycles without `ok`, the mission becomes `NeedsHumanAttention` rather than escalating above Luna High.
 11. A mission reaches Completed only after all scheduled tasks, including the final validator, are Completed.
 12. Recovery-relevant transitions and dynamically added tasks are persisted before the next external action.
-13. An interrupted deterministic Running task may be safely re-run on Worker startup.
-14. Quota exhaustion is a wait state rather than a mission failure; automatic paid API fallback is forbidden.
+13. Mutable tasks persist their execution context before external work begins. An interrupted Luna Low task resumes as `Retrying` against its original Git workspace baseline.
+14. Deterministic `write_file` and `create_directory` operations may be replayed. `rename_path` uses persisted pre-execution state to recognize an already-applied rename.
+15. An interrupted arbitrary `run_command` is not replayed automatically because LoopGolem cannot prove whether side effects already occurred; the mission becomes `NeedsHumanAttention`.
+16. Quota exhaustion is a wait state rather than a mission failure; automatic paid API fallback is forbidden.
 
 ## Self-hosting
 
