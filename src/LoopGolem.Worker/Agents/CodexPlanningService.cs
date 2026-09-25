@@ -7,13 +7,9 @@ namespace LoopGolem.Worker.Agents;
 
 public sealed class CodexPlanningService(
     ProcessRunner processRunner,
-    CodexCliService runtime)
+    CodexCliService runtime,
+    CodexSessionTransport transport)
 {
-    private sealed record StructuredRunResult(
-        ProcessRunResult Process,
-        string FinalMessage,
-        string Details,
-        TokenUsage? TokenUsage);
 
     public const string PlannerModel = "gpt-6-luna";
     public const string PlannerReasoning = "high";
@@ -29,17 +25,14 @@ public sealed class CodexPlanningService(
         "child processes, but the current orchestrator process remains on its " +
         "original binary.";
 
-    private static readonly TimeSpan ExecutionTimeout =
-        TimeSpan.FromMinutes(60);
-
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
 
-    private readonly WslRuntimeService _wsl = new(processRunner);
     private readonly GitSnapshotService _snapshots = new(processRunner);
 
     public async Task<TaskExecutionResult> PlanAsync(
         Mission mission,
+        MissionTask task,
         CancellationToken cancellationToken = default)
     {
         var status = await runtime.GetStatusAsync(cancellationToken);
@@ -61,13 +54,20 @@ public sealed class CodexPlanningService(
             mission.WorkspacePath,
             cancellationToken);
 
-        var run = await RunStructuredAsync(
-            mission.WorkspacePath,
-            PlannerModel,
-            PlannerReasoning,
-            "read-only",
-            PlannerSchema,
-            BuildPlannerPrompt(mission),
+        var run = await transport.RunStructuredAsync(
+            new CodexStructuredRunRequest(
+                mission.Id,
+                task.Id,
+                AgentSessionRole.Supervisor,
+                AgentTurnPurpose.Planning,
+                CodexSessionMode.FreshEphemeral,
+                null,
+                mission.WorkspacePath,
+                PlannerModel,
+                PlannerReasoning,
+                "read-only",
+                PlannerSchema,
+                BuildPlannerPrompt(mission)),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -127,7 +127,8 @@ public sealed class CodexPlanningService(
             plan.Summary,
             JsonSerializer.Serialize(
                 new PlannerResult(baseCommit, plan),
-                JsonOptions));
+                JsonOptions),
+            run.TokenUsage);
     }
 
     public async Task<TaskExecutionResult> ValidateAsync(
@@ -189,16 +190,23 @@ public sealed class CodexPlanningService(
                 exception.Message);
         }
 
-        var run = await RunStructuredAsync(
-            mission.WorkspacePath,
-            PlannerModel,
-            PlannerReasoning,
-            "read-only",
-            ValidatorSchema,
-            BuildValidatorPrompt(
-                mission,
-                context,
-                snapshotCommit),
+        var run = await transport.RunStructuredAsync(
+            new CodexStructuredRunRequest(
+                mission.Id,
+                task.Id,
+                AgentSessionRole.Validator,
+                AgentTurnPurpose.Validation,
+                CodexSessionMode.FreshEphemeral,
+                null,
+                mission.WorkspacePath,
+                PlannerModel,
+                PlannerReasoning,
+                "read-only",
+                ValidatorSchema,
+                BuildValidatorPrompt(
+                    mission,
+                    context,
+                    snapshotCommit)),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -293,7 +301,8 @@ public sealed class CodexPlanningService(
                 new ValidatorExecutionResult(
                     snapshotCommit,
                     result),
-                JsonOptions));
+                JsonOptions),
+            run.TokenUsage);
     }
 
     public async Task<TaskExecutionResult> ExecuteMicroTaskAsync(
@@ -345,13 +354,20 @@ public sealed class CodexPlanningService(
                 "The persisted workspace snapshot could not be restored.");
         }
 
-        var run = await RunStructuredAsync(
-            mission.WorkspacePath,
-            WorkerModel,
-            WorkerReasoning,
-            "workspace-write",
-            WorkerSchema,
-            BuildWorkerPrompt(definition),
+        var run = await transport.RunStructuredAsync(
+            new CodexStructuredRunRequest(
+                mission.Id,
+                task.Id,
+                AgentSessionRole.Worker,
+                AgentTurnPurpose.Work,
+                CodexSessionMode.FreshEphemeral,
+                null,
+                mission.WorkspacePath,
+                WorkerModel,
+                WorkerReasoning,
+                "workspace-write",
+                WorkerSchema,
+                BuildWorkerPrompt(definition)),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -468,295 +484,10 @@ public sealed class CodexPlanningService(
         };
     }
 
-    private async Task<StructuredRunResult>
-        RunStructuredAsync(
-            string workspace,
-            string model,
-            string reasoning,
-            string sandbox,
-            string schema,
-            string prompt,
-            CancellationToken cancellationToken)
-    {
-        var runtimeDirectory = Path.Combine(
-            Path.GetTempPath(),
-            "LoopGolem",
-            "structured",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(runtimeDirectory);
-
-        var outputPath = Path.Combine(runtimeDirectory, "last-message.json");
-        var schemaPath = Path.Combine(runtimeDirectory, "schema.json");
-
-        await File.WriteAllTextAsync(schemaPath, schema, cancellationToken);
-
-        try
-        {
-            ProcessRunResult process;
-
-            if (OperatingSystem.IsWindows())
-            {
-                var status = await runtime.GetStatusAsync(cancellationToken);
-                var distribution = status.Distribution
-                    ?? throw new InvalidOperationException(
-                        "WSL distribution is unavailable.");
-
-                var wslWorkspace = await _wsl.ConvertWindowsPathAsync(
-                    distribution,
-                    workspace,
-                    cancellationToken);
-                var wslOutput = await _wsl.ConvertWindowsPathAsync(
-                    distribution,
-                    outputPath,
-                    cancellationToken);
-                var wslSchema = await _wsl.ConvertWindowsPathAsync(
-                    distribution,
-                    schemaPath,
-                    cancellationToken);
-
-                process = await _wsl.RunLoginShellExecutableAsync(
-                    distribution,
-                    "codex",
-                    BuildArguments(
-                        wslWorkspace,
-                        model,
-                        reasoning,
-                        sandbox,
-                        wslSchema,
-                        wslOutput),
-                    ExecutionTimeout,
-                    cancellationToken,
-                    prompt);
-            }
-            else
-            {
-                process = await processRunner.RunAsync(
-                    "codex",
-                    BuildArguments(
-                        workspace,
-                        model,
-                        reasoning,
-                        sandbox,
-                        schemaPath,
-                        outputPath),
-                    workspace,
-                    ExecutionTimeout,
-                    cancellationToken,
-                    prompt);
-            }
-
-            var finalMessage = File.Exists(outputPath)
-                ? await File.ReadAllTextAsync(outputPath, cancellationToken)
-                : string.Empty;
-
-            var tokenUsage = ParseTokenUsage(
-                process.StandardOutput);
-
-            var details = JsonSerializer.Serialize(new
-            {
-                model,
-                reasoning,
-                sandbox,
-                tokenUsage,
-                process
-            });
-
-            return new StructuredRunResult(
-                process,
-                finalMessage.Trim(),
-                details,
-                tokenUsage);
-        }
-        finally
-        {
-            try
-            {
-                Directory.Delete(runtimeDirectory, recursive: true);
-            }
-            catch
-            {
-            }
-        }
-    }
-
-    private static IReadOnlyList<string> BuildArguments(
-        string workspace,
-        string model,
-        string reasoning,
-        string sandbox,
-        string schemaPath,
-        string outputPath) =>
-        [
-            "exec",
-            "--json",
-            "--ephemeral",
-            "--ignore-user-config",
-            "--disable", "apps",
-            "--disable", "plugins",
-            "--disable", "multi_agent",
-            "--color", "never",
-            "--sandbox", sandbox,
-            "--cd", workspace,
-            "--model", model,
-            "--config", $"model_reasoning_effort=\"{reasoning}\"",
-            "--config", "approval_policy=never",
-            "--config", "sandbox_workspace_write.network_access=false",
-            "--output-schema", schemaPath,
-            "--output-last-message", outputPath,
-            "-"
-        ];
-
     internal static TokenUsage? ParseTokenUsage(
-        string jsonLines)
-    {
-        TokenUsage? latest = null;
-
-        foreach (var line in jsonLines.Split(
-                     ['\r', '\n'],
-                     StringSplitOptions.RemoveEmptyEntries |
-                     StringSplitOptions.TrimEntries))
-        {
-            try
-            {
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-
-                if (TryGetUsageElement(
-                        root,
-                        out var usage))
-                {
-                    latest = ParseUsageElement(usage);
-                }
-            }
-            catch (JsonException)
-            {
-                // Ignore non-JSON diagnostics. The structured Codex stream
-                // may coexist with launcher output on some runtimes.
-            }
-        }
-
-        return latest;
-    }
-
-    private static bool TryGetUsageElement(
-        JsonElement root,
-        out JsonElement usage)
-    {
-        if (root.TryGetProperty("type", out var type) &&
-            type.ValueKind == JsonValueKind.String &&
-            string.Equals(
-                type.GetString(),
-                "turn.completed",
-                StringComparison.Ordinal) &&
-            root.TryGetProperty("usage", out usage) &&
-            usage.ValueKind == JsonValueKind.Object)
-        {
-            return true;
-        }
-
-        if (root.TryGetProperty("msg", out var message) &&
-            TryGetLegacyTokenUsage(
-                message,
-                out usage))
-        {
-            return true;
-        }
-
-        if (root.TryGetProperty("payload", out var payload) &&
-            TryGetLegacyTokenUsage(
-                payload,
-                out usage))
-        {
-            return true;
-        }
-
-        usage = default;
-        return false;
-    }
-
-    private static bool TryGetLegacyTokenUsage(
-        JsonElement container,
-        out JsonElement usage)
-    {
-        if (container.ValueKind == JsonValueKind.Object &&
-            container.TryGetProperty("type", out var type) &&
-            type.ValueKind == JsonValueKind.String &&
-            string.Equals(
-                type.GetString(),
-                "token_count",
-                StringComparison.Ordinal) &&
-            container.TryGetProperty("info", out var info) &&
-            info.ValueKind == JsonValueKind.Object)
-        {
-            if (info.TryGetProperty(
-                    "total_token_usage",
-                    out usage) &&
-                usage.ValueKind == JsonValueKind.Object)
-            {
-                return true;
-            }
-
-            if (info.TryGetProperty(
-                    "last_token_usage",
-                    out usage) &&
-                usage.ValueKind == JsonValueKind.Object)
-            {
-                return true;
-            }
-        }
-
-        usage = default;
-        return false;
-    }
-
-    private static TokenUsage ParseUsageElement(
-        JsonElement usage)
-    {
-        var input = GetTokenCount(
-            usage,
-            "input_tokens");
-        var cachedInput = GetTokenCount(
-            usage,
-            "cached_input_tokens");
-        var cacheWriteInput = GetTokenCount(
-            usage,
-            "cache_write_input_tokens");
-        var output = GetTokenCount(
-            usage,
-            "output_tokens");
-        var reasoningOutput = GetTokenCount(
-            usage,
-            "reasoning_output_tokens");
-        var total = GetTokenCount(
-            usage,
-            "total_tokens");
-
-        if (total == 0)
-        {
-            total = checked(input + output);
-        }
-
-        return new TokenUsage(
-            input,
-            cachedInput,
-            output,
-            reasoningOutput,
-            total)
-        {
-            CacheWriteInputTokens = cacheWriteInput
-        };
-    }
-
-    private static long GetTokenCount(
-        JsonElement usage,
-        string propertyName) =>
-        usage.TryGetProperty(
-            propertyName,
-            out var value) &&
-        value.ValueKind == JsonValueKind.Number &&
-        value.TryGetInt64(out var count)
-            ? count
-            : 0;
+        string jsonLines) =>
+        CodexSessionTransport.ParseTokenUsage(
+            jsonLines);
 
     internal static string BuildPlannerPrompt(Mission mission) =>
         $"""
