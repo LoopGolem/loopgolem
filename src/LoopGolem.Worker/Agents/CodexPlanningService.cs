@@ -536,6 +536,7 @@ public sealed class CodexPlanningService(
         - run_command is direct process execution on the DETERMINISTIC HOST: executable plus arguments, never a shell command string.
         - Luna Low runs in the AGENT ENVIRONMENT, not on the deterministic host.
         - Never ask Luna Low to execute a probed tool marked UNAVAILABLE in the agent environment.
+        - Do not put a host-only tool command into a Luna Low acceptanceChecks list.
         - When a required check uses a tool available on the host but unavailable in the agent environment, schedule that check as deterministic host work instead of asking Luna Low to run it.
         - Do not infer that an unprobed tool is unavailable.
         - Use executor "luna_low" when implementation judgment is required.
