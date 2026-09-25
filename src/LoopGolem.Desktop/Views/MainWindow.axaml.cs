@@ -412,13 +412,25 @@ public partial class MainWindow : Window
     {
         var status = GetTaskStatusText(task.Status);
 
-        return task.TokenUsage is
-            {
-                TotalTokens: > 0
-            } usage
-            ? $"{status} · {FormatTokenCount(usage.TotalTokens)}"
+        if (task.TokenUsage is { } usage)
+        {
+            return $"{status} · {FormatTokenCount(usage.TotalTokens)}";
+        }
+
+        return task.Status == DomainTaskStatus.Completed &&
+               !TaskConsumesModel(task)
+            ? $"{status} · {FormatTokenCount(0)}"
             : status;
     }
+
+    private static bool TaskConsumesModel(
+        MissionTask task) =>
+        task.Kind is
+            MissionTaskKind.PlanMission or
+            MissionTaskKind.ValidateMission ||
+        task.Kind == MissionTaskKind.AgentWork &&
+        task.Definition?.Executor ==
+            PlannedExecutorKinds.LunaLow;
 
     private static string FormatTokenCount(long tokenCount) =>
         $"{tokenCount.ToString("N0", LocalizationService.CurrentCulture)} " +
