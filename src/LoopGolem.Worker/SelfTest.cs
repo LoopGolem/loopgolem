@@ -247,7 +247,9 @@ internal static class SelfTest
                         task.Kind ==
                         MissionTaskKind.ValidateMission) != 2 ||
                 persisted.Tasks.Any(
-                    task => task.Definition is null))
+                    task => task.Definition is null) ||
+                persisted.Tasks.Sum(
+                    task => task.TokenUsage?.TotalTokens ?? 0) != 240)
             {
                 Console.Error.WriteLine(
                     "Self-test did not persist expanded validator plan metadata.");
