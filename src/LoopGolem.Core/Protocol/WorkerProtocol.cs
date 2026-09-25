@@ -55,6 +55,7 @@ public sealed record AgentRoleTelemetrySummary(
     long TotalTokens);
 
 public sealed record MissionTelemetrySummary(
+    long DurationMilliseconds,
     int Sessions,
     int ActiveSessions,
     int InvalidatedSessions,
