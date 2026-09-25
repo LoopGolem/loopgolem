@@ -13,4 +13,6 @@ public sealed record Mission(
 {
     public MissionExecutionPolicy Policy { get; init; } =
         MissionExecutionPolicy.Default;
+
+    public MissionCapabilitySnapshot? Capabilities { get; init; }
 }
