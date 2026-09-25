@@ -9,4 +9,8 @@ public sealed record Mission(
     string? Result,
     string? Error,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc)
+{
+    public MissionExecutionPolicy Policy { get; init; } =
+        MissionExecutionPolicy.Default;
+}
