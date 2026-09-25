@@ -1,5 +1,6 @@
 using System.Text.Json;
 using LoopGolem.Core.Domain;
+using LoopGolem.Core.Protocol;
 using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Agents;
 using LoopGolem.Worker.Execution;
@@ -108,6 +109,12 @@ internal static class SelfTest
             }
 
             if (!VerifyCodexSessionProtocol())
+            {
+                return 1;
+            }
+
+            if (!await VerifyMissionTelemetrySummaryAsync(
+                    root))
             {
                 return 1;
             }
@@ -750,6 +757,292 @@ internal static class SelfTest
         }
 
         return false;
+    }
+
+    private static async Task<bool>
+        VerifyMissionTelemetrySummaryAsync(
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "telemetry-summary.db");
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        var missionId =
+            $"telemetry-{Guid.NewGuid():N}";
+        var taskId =
+            $"telemetry-task-{Guid.NewGuid():N}";
+        var mission =
+            new Mission(
+                missionId,
+                "Verify mission telemetry aggregation.",
+                root,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now);
+        var task =
+            new MissionTask(
+                taskId,
+                missionId,
+                1,
+                MissionTaskKind.DeterministicWork,
+                "Telemetry anchor",
+                null,
+                DomainTaskStatus.Completed,
+                null,
+                null,
+                null,
+                now,
+                now);
+
+        await store.CreateAsync(
+            new MissionSnapshot(
+                mission,
+                [task]));
+
+        var supervisor =
+            new AgentSession(
+                $"supervisor-{Guid.NewGuid():N}",
+                missionId,
+                AgentSessionRole.Supervisor,
+                "gpt-6-luna",
+                "high",
+                "supervisor-thread",
+                AgentSessionStatus.Active,
+                null,
+                1,
+                0,
+                null,
+                now,
+                now,
+                now);
+        var worker =
+            new AgentSession(
+                $"worker-{Guid.NewGuid():N}",
+                missionId,
+                AgentSessionRole.Worker,
+                "gpt-6-luna",
+                "low",
+                "worker-thread",
+                AgentSessionStatus.Closed,
+                null,
+                2,
+                2,
+                "worker_microtask_cap",
+                now,
+                now,
+                now);
+        var validator =
+            new AgentSession(
+                $"validator-{Guid.NewGuid():N}",
+                missionId,
+                AgentSessionRole.Validator,
+                "gpt-6-luna",
+                "high",
+                "validator-thread",
+                AgentSessionStatus.Invalidated,
+                null,
+                1,
+                0,
+                "provider_session_not_found",
+                now,
+                now,
+                now);
+
+        foreach (var session in new[]
+                 {
+                     supervisor,
+                     worker,
+                     validator
+                 })
+        {
+            await store.UpsertAgentSessionAsync(
+                session);
+        }
+
+        AgentTurn Turn(
+            string id,
+            AgentSession session,
+            AgentTurnPurpose purpose,
+            int number,
+            long input,
+            long cached,
+            long cacheWrite,
+            long output,
+            long reasoning,
+            long total,
+            bool? reuse = null) =>
+            new(
+                id,
+                missionId,
+                taskId,
+                session.Id,
+                purpose,
+                session.Model,
+                session.ReasoningEffort,
+                number,
+                now,
+                now.AddMilliseconds(10),
+                10,
+                input,
+                cached,
+                cacheWrite,
+                output,
+                reasoning,
+                total)
+            {
+                ContextReuseRecommended =
+                    reuse,
+                ContextReuseReason =
+                    reuse is null
+                        ? null
+                        : "self-test"
+            };
+
+        var turns = new[]
+        {
+            Turn(
+                $"turn-{Guid.NewGuid():N}",
+                supervisor,
+                AgentTurnPurpose.Planning,
+                1,
+                100, 50, 5, 20, 4, 120),
+            Turn(
+                $"turn-{Guid.NewGuid():N}",
+                worker,
+                AgentTurnPurpose.Work,
+                1,
+                80, 60, 3, 10, 2, 90,
+                true),
+            Turn(
+                $"turn-{Guid.NewGuid():N}",
+                worker,
+                AgentTurnPurpose.Work,
+                2,
+                70, 55, 2, 8, 1, 78,
+                false),
+            Turn(
+                $"turn-{Guid.NewGuid():N}",
+                validator,
+                AgentTurnPurpose.Validation,
+                1,
+                60, 30, 0, 12, 3, 72)
+        };
+
+        foreach (var turn in turns)
+        {
+            await store.UpsertAgentTurnAsync(
+                turn);
+        }
+
+        await store.UpsertRecoveryCycleAsync(
+            new RecoveryCycle(
+                $"recovery-{Guid.NewGuid():N}",
+                missionId,
+                taskId,
+                1,
+                RecoveryCycleStatus.Succeeded,
+                null,
+                null,
+                [],
+                now,
+                now));
+        await store.UpsertRecoveryCycleAsync(
+            new RecoveryCycle(
+                $"recovery-{Guid.NewGuid():N}",
+                missionId,
+                taskId,
+                2,
+                RecoveryCycleStatus.Exhausted,
+                null,
+                null,
+                [],
+                now,
+                now));
+
+        var telemetry =
+            await new MissionTelemetryService(
+                store)
+                .GetSummaryAsync(
+                    missionId);
+
+        var supervisorSummary =
+            telemetry.Roles.Single(
+                role =>
+                    role.Role ==
+                    AgentSessionRole.Supervisor);
+        var workerSummary =
+            telemetry.Roles.Single(
+                role =>
+                    role.Role ==
+                    AgentSessionRole.Worker);
+        var validatorSummary =
+            telemetry.Roles.Single(
+                role =>
+                    role.Role ==
+                    AgentSessionRole.Validator);
+
+        if (telemetry.Sessions != 3 ||
+            telemetry.ActiveSessions != 1 ||
+            telemetry.InvalidatedSessions != 1 ||
+            telemetry.Turns != 4 ||
+            telemetry.RecoveryCycles != 2 ||
+            telemetry.SuccessfulRecoveryCycles != 1 ||
+            telemetry.ExhaustedRecoveryCycles != 1 ||
+            telemetry.WorkerReusedTurns != 1 ||
+            telemetry.WorkerReuseRecommendedTurns != 1 ||
+            telemetry.InputTokens != 310 ||
+            telemetry.CachedInputTokens != 195 ||
+            telemetry.CacheWriteInputTokens != 10 ||
+            telemetry.OutputTokens != 50 ||
+            telemetry.ReasoningOutputTokens != 10 ||
+            telemetry.TotalTokens != 360 ||
+            supervisorSummary.Sessions != 1 ||
+            supervisorSummary.Turns != 1 ||
+            supervisorSummary.TotalTokens != 120 ||
+            workerSummary.Sessions != 1 ||
+            workerSummary.Turns != 2 ||
+            workerSummary.TotalTokens != 168 ||
+            validatorSummary.Sessions != 1 ||
+            validatorSummary.Turns != 1 ||
+            validatorSummary.TotalTokens != 72)
+        {
+            Console.Error.WriteLine(
+                "Self-test mission telemetry summary is incorrect.");
+            return false;
+        }
+
+        var serialized =
+            JsonSerializer.Serialize(
+                new WorkerResponse(
+                    true,
+                    Mission:
+                        new MissionSnapshot(
+                            mission,
+                            [task]),
+                    Telemetry: telemetry),
+                JsonOptions);
+        var roundTrip =
+            JsonSerializer.Deserialize<WorkerResponse>(
+                serialized,
+                JsonOptions);
+
+        if (roundTrip?.Telemetry !=
+                telemetry)
+        {
+            Console.Error.WriteLine(
+                "Self-test mission telemetry IPC round-trip failed.");
+            return false;
+        }
+
+        return true;
     }
 
     private static async Task<bool>
