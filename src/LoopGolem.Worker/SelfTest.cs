@@ -119,6 +119,13 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!await VerifyMissionPolicyOverrideAsync(
+                    workspace,
+                    root))
+            {
+                return 1;
+            }
+
             if (!await VerifyProcessStreamingAsync(
                     processRunner,
                     root))
@@ -1044,6 +1051,90 @@ internal static class SelfTest
         {
             Console.Error.WriteLine(
                 "Self-test mission telemetry IPC round-trip failed.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<bool>
+        VerifyMissionPolicyOverrideAsync(
+            string workspace,
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "policy-override.db");
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var orchestrator =
+            new MissionOrchestrator(
+                store,
+                Array.Empty<IMissionTaskExecutor>());
+        var requestedPolicy =
+            MissionPolicy.Default with
+            {
+                SessionReuse =
+                    SessionReuseMode.Disabled,
+                MaxWorkerSessionMicrotasks = 2
+            };
+
+        var created =
+            await orchestrator.CreateMissionAsync(
+                "Verify explicit benchmark policy persistence.",
+                workspace,
+                MissionExecutionMode.Codex,
+                policy: requestedPolicy);
+
+        if (created.Mission.Policy !=
+            requestedPolicy)
+        {
+            Console.Error.WriteLine(
+                "Self-test explicit mission policy was not applied at creation.");
+            return false;
+        }
+
+        var reopened =
+            new SqliteMissionStore(database);
+        await reopened.InitializeAsync();
+        var persisted =
+            await reopened.GetAsync(
+                created.Mission.Id);
+
+        if (persisted?.Mission.Policy !=
+            requestedPolicy)
+        {
+            Console.Error.WriteLine(
+                "Self-test explicit mission policy did not survive SQLite reopen.");
+            return false;
+        }
+
+        var request =
+            new WorkerRequest(
+                WorkerProtocol.CreateMission,
+                Goal: "benchmark",
+                WorkspacePath: workspace,
+                ExecutionMode:
+                    MissionExecutionMode.Codex,
+                SessionReuse:
+                    SessionReuseMode.Disabled);
+        var serialized =
+            JsonSerializer.Serialize(
+                request,
+                JsonOptions);
+        var roundTrip =
+            JsonSerializer.Deserialize<WorkerRequest>(
+                serialized,
+                JsonOptions);
+
+        if (roundTrip?.SessionReuse !=
+            SessionReuseMode.Disabled)
+        {
+            Console.Error.WriteLine(
+                "Self-test Worker protocol did not preserve session reuse mode.");
             return false;
         }
 
