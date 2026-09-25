@@ -138,6 +138,22 @@ public sealed class ProcessRunner
         catch (OperationCanceledException)
         {
             TryKillProcessTree(process);
+            await process.WaitForExitAsync(
+                CancellationToken.None);
+
+            try
+            {
+                await Task.WhenAll(
+                    stdoutTask,
+                    stderrTask);
+            }
+            catch
+            {
+                // Preserve the caller cancellation as the primary outcome.
+                // Any thread.started persistence callback already ran with
+                // its own crash-safe persistence semantics.
+            }
+
             throw;
         }
         catch
