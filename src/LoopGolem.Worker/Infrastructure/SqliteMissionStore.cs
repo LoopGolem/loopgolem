@@ -44,6 +44,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                     kind TEXT NOT NULL DEFAULT 'InspectWorkspace',
                     title TEXT NOT NULL,
                     definition_json TEXT NULL,
+                    execution_context TEXT NULL,
                     status TEXT NOT NULL,
                     result TEXT NULL,
                     result_details TEXT NULL,
@@ -82,6 +83,12 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             connection,
             "mission_tasks",
             "result_details",
+            "TEXT NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "mission_tasks",
+            "execution_context",
             "TEXT NULL",
             cancellationToken);
 
@@ -283,10 +290,10 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO mission_tasks (
-                id, mission_id, sequence, kind, title, definition_json, status,
+                id, mission_id, sequence, kind, title, definition_json, execution_context, status,
                 result, result_details, error, created_utc, updated_utc)
             VALUES (
-                $id, $missionId, $sequence, $kind, $title, $definitionJson, $status,
+                $id, $missionId, $sequence, $kind, $title, $definitionJson, $executionContext, $status,
                 $result, $resultDetails, $error, $createdUtc, $updatedUtc);
             """;
 
@@ -314,6 +321,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 kind = excluded.kind,
                 title = excluded.title,
                 definition_json = excluded.definition_json,
+                execution_context = excluded.execution_context,
                 status = excluded.status,
                 result = excluded.result,
                 result_details = excluded.result_details,
@@ -365,7 +373,7 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
 
         await using var taskCommand = connection.CreateCommand();
         taskCommand.CommandText = """
-            SELECT id, mission_id, sequence, kind, title, definition_json, status,
+            SELECT id, mission_id, sequence, kind, title, definition_json, execution_context, status,
                    result, result_details, error, created_utc, updated_utc
             FROM mission_tasks
             WHERE mission_id = $missionId
@@ -387,12 +395,18 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
                 taskReader.IsDBNull(5)
                     ? null
                     : JsonSerializer.Deserialize<PlannedTask>(taskReader.GetString(5)),
-                Enum.Parse<DomainTaskStatus>(taskReader.GetString(6)),
-                taskReader.IsDBNull(7) ? null : taskReader.GetString(7),
+                Enum.Parse<DomainTaskStatus>(taskReader.GetString(7)),
                 taskReader.IsDBNull(8) ? null : taskReader.GetString(8),
                 taskReader.IsDBNull(9) ? null : taskReader.GetString(9),
-                ParseTimestamp(taskReader.GetString(10)),
-                ParseTimestamp(taskReader.GetString(11))));
+                taskReader.IsDBNull(10) ? null : taskReader.GetString(10),
+                ParseTimestamp(taskReader.GetString(11)),
+                ParseTimestamp(taskReader.GetString(12)))
+            {
+                ExecutionContext =
+                    taskReader.IsDBNull(6)
+                        ? null
+                        : taskReader.GetString(6)
+            });
         }
 
         if (tasks.Count == 0)
@@ -432,6 +446,9 @@ public sealed class SqliteMissionStore(string databasePath) : IMissionStore
             task.Definition is null
                 ? DBNull.Value
                 : JsonSerializer.Serialize(task.Definition));
+        command.Parameters.AddWithValue(
+            "$executionContext",
+            (object?)task.ExecutionContext ?? DBNull.Value);
         command.Parameters.AddWithValue("$status", task.Status.ToString());
         command.Parameters.AddWithValue("$result", (object?)task.Result ?? DBNull.Value);
         command.Parameters.AddWithValue(
