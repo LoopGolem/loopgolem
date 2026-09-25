@@ -1950,6 +1950,20 @@ internal static class SelfTest
             {
                 FailNextResumeAsMissing = false;
 
+                var sessions =
+                    await store.ListAgentSessionsAsync(
+                        request.MissionId,
+                        cancellationToken);
+                var expected =
+                    sessions.Single(
+                        candidate =>
+                            candidate.Id ==
+                            request.SessionId);
+                var providerThreadId =
+                    expected.ProviderThreadId
+                    ?? throw new InvalidOperationException(
+                        "Fake Supervisor resume requires a provider thread id.");
+
                 return new CodexStructuredRunResult(
                     new ProcessRunResult(
                         "codex",
@@ -1958,12 +1972,12 @@ internal static class SelfTest
                         false,
                         1,
                         string.Empty,
-                        $"Session not found: {request.SessionId}"),
+                        $"Session not found: {providerThreadId}"),
                     string.Empty,
                     "{}",
                     null,
                     request.SessionId!,
-                    null,
+                    providerThreadId,
                     0);
             }
 
