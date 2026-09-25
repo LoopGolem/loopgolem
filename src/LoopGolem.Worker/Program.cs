@@ -26,6 +26,7 @@ IMissionTaskExecutor[] executors =
     new ProjectDiscoveryExecutor(),
     new CapabilityInspectionExecutor(processRunner, codex),
     new PlannerTaskExecutor(planning),
+    new RecoveryPlannerTaskExecutor(planning),
     new DeterministicTaskExecutor(processRunner),
     new MicroTaskAgentExecutor(planning, processRunner),
     new ValidatorTaskExecutor(planning),
