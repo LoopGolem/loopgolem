@@ -9,11 +9,6 @@ public static class RecoveryTaskNaming
         ArgumentException.ThrowIfNullOrWhiteSpace(
             failedTaskId);
 
-        var compactId =
-            failedTaskId.Length <= 8
-                ? failedTaskId
-                : failedTaskId[..8];
-
-        return $"repair{cycleNumber}_{compactId}_";
+        return $"repair{cycleNumber}_{failedTaskId}_";
     }
 }
