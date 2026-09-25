@@ -54,7 +54,8 @@ public sealed class GitChangesExecutor(ProcessRunner processRunner)
                 string.IsNullOrWhiteSpace(diffCheck.StandardError)
                     ? diffCheck.StandardOutput.Trim()
                     : diffCheck.StandardError.Trim(),
-                details);
+                details,
+                failureKind: TaskFailureKind.DeterministicCheck);
         }
 
         var changed = status.StandardOutput.Split(
