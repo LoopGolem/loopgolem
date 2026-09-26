@@ -189,3 +189,36 @@ The runner deliberately does not choose a winner. Both arms must first satisfy
 the success criteria above. It requires the exact benchmark prompt in a file
 and an external acceptance-test PowerShell script that accepts
 `-Workspace <path>` and exits 0 only on success.
+
+
+## First run result — 2026-09-26
+
+The first controlled execution is recorded in
+`docs/benchmarks/taskforge-v3-results.md`.
+
+It is **inconclusive as an F/H strategy comparison**:
+
+- the frozen PlannerResult and workspace-reset controls worked;
+- Arm F failed before any model turn because the fork response reported
+  `reasoningEffort=null`;
+- the fork model guard had already passed, so that attempted child matched the
+  requested `gpt-6-luna` model;
+- Arm F therefore recorded zero model tokens and its 0% -> 0% allowance reading
+  is not a cost result;
+- Arm H completed the LoopGolem mission with 1,005,320 reported mission tokens
+  and moved both the programmatic and visible five-hour meters by one point;
+- Arm H's external acceptance harness aborted on Windows PowerShell 5.1 while
+  intentionally testing a non-zero invalid-ID command, so its external
+  functional result remains unresolved.
+
+Before another complete paired run:
+
+1. explicitly configure the fork child as HIGH during `thread/fork`;
+2. rerun the acceptance harness against the preserved H artifact without model
+   inference;
+3. run the no-turn model-identity probe for old-style unpinned versus pinned
+   fork requests;
+4. run a narrow F-only smoke/measurement;
+5. repeat the paired benchmark only after F has executed real Worker turns.
+
+Do not use the first F allowance delta to claim fork-cost superiority.
