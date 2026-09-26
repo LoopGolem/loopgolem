@@ -632,3 +632,81 @@ The user observed an additional six visible percentage points consumed from the 
 
 Raw per-turn token telemetry remains the primary experimental measurement.
 
+
+
+## TaskForge benchmark v3 fork finding — 2026-09-26
+
+The first TaskForge v3 allowance-strategy run exposed an important distinction
+between **model identity** and **reasoning-effort inheritance** on
+`thread/fork`.
+
+The production experimental SupervisorFork transport had already been changed
+to send `model="gpt-6-luna"` explicitly and to reject any fork response whose
+returned model differed.
+
+During Arm F, the first Worker task failed with:
+
+```text
+Forked Worker did not inherit HIGH reasoning; observed '(null)'.
+```
+
+The transport checks returned model identity before it checks returned
+reasoning effort. Therefore the attempted child in this run passed the
+`gpt-6-luna` model guard and failed only the later HIGH-effort guard.
+
+No Worker `turn/start` occurred. Arm F reported zero sessions, zero turns and
+zero model tokens. Its unchanged five-hour allowance reading is consequently
+not evidence about fork economics.
+
+### Historical unpinned-child hypothesis
+
+Older fork probes and the initial SupervisorFork implementation did not always
+send an explicit `model` override on `thread/fork`. Earlier investigation
+verified that relevant parent threads were GPT-6 Luna, but parent identity does
+not by itself prove the model identity of every child response.
+
+It is therefore plausible that an unpinned child could have resolved through a
+different configured/default model. This remains a hypothesis, not a finding.
+Do not retroactively label the old children as Astra without direct evidence.
+
+A no-turn diagnostic probe is versioned at
+`docs/benchmarks/probe-fork-model-no-turn.py`. It starts one explicit Luna
+HIGH parent without calling `turn/start`, then compares:
+
+1. an old-style fork request with no `model` field;
+2. a pinned fork request with `model="gpt-6-luna"`.
+
+The probe never starts a model turn and is intended only to inspect returned
+thread metadata.
+
+### Reasoning-effort remediation
+
+Implicit HIGH inheritance is no longer treated as sufficient. The experimental
+transport now supplies:
+
+```text
+model_reasoning_effort = "high"
+```
+
+in the fork configuration, while retaining a post-fork assertion that the
+returned effort is HIGH before applying the Worker LOW effort on
+`turn/start`.
+
+The fork configuration also explicitly disables workspace-write network access
+so the app-server path matches the Fresh exec sandbox invariant more closely.
+
+This preserves the intended lifecycle:
+
+```text
+Supervisor Luna HIGH
+        |
+        +-- thread/fork(model=Luna, config effort=HIGH)
+                    |
+                    +-- verify model=Luna
+                    +-- verify effort=HIGH
+                    |
+                    +-- turn/start effort=LOW
+```
+
+The next meaningful cost experiment is a real F Worker turn after these
+invariants pass; the failed first v3 F arm cannot be used for cost comparison.
