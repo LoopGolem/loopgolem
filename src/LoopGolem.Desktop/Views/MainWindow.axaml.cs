@@ -288,6 +288,8 @@ public partial class MainWindow : Window
             _codexChecked = false;
             _codexReady = false;
             ReuseLowContextCheckBox.IsEnabled = false;
+            ForkSupervisorContextCheckBox.IsEnabled = false;
+            HighWorkerReasoningCheckBox.IsEnabled = false;
             WorkerStatusText.Text = LocalizationService.Get("Disconnected");
             CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
             MissionStatusValue.Text = LocalizationService.Get("NotStarted");
