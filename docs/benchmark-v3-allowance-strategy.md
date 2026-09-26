@@ -71,6 +71,11 @@ Keep identical between arms:
 
 The Worker must not create sub-agents in either arm.
 
+Run the plan-only source and both measured arms with the same isolated
+`LOOPGOLEM_STATE_DIR`. This prevents Worker startup recovery from resuming
+unrelated persisted missions and consuming allowance outside the benchmark,
+while preserving the paused source mission across Worker restarts.
+
 ## Allowance measurement
 
 The included-plan five-hour meter is coarse and may be quantized or delayed. Therefore:

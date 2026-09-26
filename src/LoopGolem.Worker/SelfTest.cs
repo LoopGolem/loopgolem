@@ -25,6 +25,11 @@ internal static class SelfTest
 
         try
         {
+            if (!VerifyStateDirectoryOverride(root))
+            {
+                return 1;
+            }
+
             Directory.CreateDirectory(workspace);
             await File.WriteAllTextAsync(
                 Path.Combine(workspace, "Demo.csproj"),
@@ -508,6 +513,55 @@ internal static class SelfTest
             catch
             {
             }
+        }
+    }
+
+    private static bool VerifyStateDirectoryOverride(
+        string root)
+    {
+        var original =
+            Environment.GetEnvironmentVariable(
+                AppPaths.StateDirectoryEnvironmentVariable);
+        var expected =
+            Path.GetFullPath(
+                Path.Combine(root, "isolated-state"));
+
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                AppPaths.StateDirectoryEnvironmentVariable,
+                expected);
+
+            var actual =
+                AppPaths.GetStateDirectory();
+            var database =
+                AppPaths.GetDatabasePath();
+            var comparison =
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+
+            if (!string.Equals(
+                    actual,
+                    expected,
+                    comparison) ||
+                !string.Equals(
+                    database,
+                    Path.Combine(expected, "loopgolem.db"),
+                    comparison))
+            {
+                Console.Error.WriteLine(
+                    "Self-test LOOPGOLEM_STATE_DIR override is invalid.");
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                AppPaths.StateDirectoryEnvironmentVariable,
+                original);
         }
     }
 

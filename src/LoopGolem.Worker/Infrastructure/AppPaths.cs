@@ -2,8 +2,19 @@ namespace LoopGolem.Worker.Infrastructure;
 
 public static class AppPaths
 {
+    public const string StateDirectoryEnvironmentVariable =
+        "LOOPGOLEM_STATE_DIR";
+
     public static string GetStateDirectory()
     {
+        var configured =
+            Environment.GetEnvironmentVariable(
+                StateDirectoryEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return Path.GetFullPath(configured);
+        }
+
         if (OperatingSystem.IsWindows())
         {
             var localAppData = Environment.GetFolderPath(
