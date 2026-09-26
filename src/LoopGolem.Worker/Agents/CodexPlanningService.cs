@@ -563,8 +563,8 @@ public sealed class CodexPlanningService(
             definition.Executor != PlannedExecutorKinds.LunaLow)
         {
             return TaskExecutionResult.Failed(
-                "Luna Low task definition is missing.",
-                "The planner did not provide a valid Luna Low microtask.");
+                "Worker task definition is missing.",
+                "The planner did not provide a valid Worker microtask.");
         }
 
         var status = await runtime.GetStatusAsync(cancellationToken);
@@ -583,7 +583,7 @@ public sealed class CodexPlanningService(
         if (string.IsNullOrWhiteSpace(task.ExecutionContext))
         {
             return TaskExecutionResult.Failed(
-                "Luna Low execution baseline is missing.",
+                "Worker execution baseline is missing.",
                 "The task was not prepared for crash-safe execution.");
         }
 
@@ -597,14 +597,14 @@ public sealed class CodexPlanningService(
         catch (JsonException exception)
         {
             return TaskExecutionResult.Failed(
-                "Luna Low execution baseline is invalid.",
+                "Worker execution baseline is invalid.",
                 exception.Message);
         }
 
         if (before is null)
         {
             return TaskExecutionResult.Failed(
-                "Luna Low execution baseline is empty.",
+                "Worker execution baseline is empty.",
                 "The persisted workspace snapshot could not be restored.");
         }
 
@@ -630,7 +630,7 @@ public sealed class CodexPlanningService(
                 mission,
                 run,
                 TaskExecutionResult.Failed(
-                    "Luna Low microtask timed out.",
+                    "Worker microtask timed out.",
                     "The microtask exceeded the one-hour timeout.",
                     run.Details,
                     run.TokenUsage),
@@ -645,7 +645,7 @@ public sealed class CodexPlanningService(
                 mission,
                 run,
                 TaskExecutionResult.Failed(
-                    $"Luna Low exited with code {run.Process.ExitCode}.",
+                    $"Worker exited with code {run.Process.ExitCode}.",
                     GetProcessError(run.Process),
                     run.Details,
                     run.TokenUsage),
@@ -733,7 +733,7 @@ public sealed class CodexPlanningService(
                 mission,
                 run,
                 TaskExecutionResult.Failed(
-                    "Luna Low modified files outside its write allowlist.",
+                    "Worker modified files outside its write allowlist.",
                     string.Join(", ", violations),
                     run.Details,
                     run.TokenUsage),
@@ -747,13 +747,13 @@ public sealed class CodexPlanningService(
             "blocked" => TaskExecutionResult.Failed(
                 outcome.Summary,
                 string.IsNullOrWhiteSpace(outcome.Blocker)
-                    ? "Luna Low reported a blocker."
+                    ? "Worker reported a blocker."
                     : outcome.Blocker,
                 run.Details,
                 run.TokenUsage),
             "changed" when changedByTask.Count == 0 =>
                 TaskExecutionResult.Failed(
-                    "Luna Low reported changes, but no file changed.",
+                    "Worker reported changes, but no file changed.",
                     "The structured result disagrees with deterministic Git verification.",
                     run.Details,
                     run.TokenUsage),
@@ -765,7 +765,7 @@ public sealed class CodexPlanningService(
                 when changedByTask.Count > 0 &&
                      task.Status != LoopGolem.Core.Domain.TaskStatus.Retrying =>
                 TaskExecutionResult.Failed(
-                    "Luna Low reported no edit was needed, but files changed.",
+                    "Worker reported no edit was needed, but files changed.",
                     string.Join(", ", changedByTask),
                     run.Details,
                     run.TokenUsage),
@@ -774,7 +774,7 @@ public sealed class CodexPlanningService(
                 run.Details,
                 run.TokenUsage),
             _ => TaskExecutionResult.Failed(
-                "Luna Low returned an unsupported outcome.",
+                "Worker returned an unsupported outcome.",
                 outcome.Outcome,
                 run.Details,
                 run.TokenUsage)
