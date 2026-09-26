@@ -400,6 +400,23 @@ Current official documentation says Work and Codex share the included plan allow
 
 Next allowance investigation should use explicit `account/rateLimits/read` snapshots immediately before and after a deliberately tiny, isolated single turn, with no concurrent Work/Codex activity, then repeat by effort/model if needed. The purpose is to characterize meter behavior, not to assume each rolling notification is a turn-scoped charge.
 
+## Probe Q1 — allowance-meter isolation protocol
+
+Before any further cache-intensive probe, characterize the account-level five-hour allowance meter with a deliberately tiny isolated experiment.
+
+Q1 protocol:
+
+1. start one app-server process with no model turn yet;
+2. call `account/rateLimits/read` three times across approximately 15 seconds;
+3. if the primary 300-minute `usedPercent` changes during this no-inference baseline, abort before model use because prior accounting is still settling;
+4. only on a stable baseline, create one fresh `gpt-6-luna / low` thread and verify the actual `ThreadStartResponse.model` and `reasoningEffort`;
+5. run one minimal no-tool turn;
+6. record the turn's raw token usage and duration;
+7. read `account/rateLimits/read` immediately after completion, then approximately +10 seconds and +30 seconds;
+8. archive/close the temporary thread and persist the complete JSON-RPC trace.
+
+Q1 is not a pricing benchmark. Its purpose is to determine whether the five-hour meter updates synchronously enough to correlate a single isolated Luna Low turn with an account-level percentage delta. If the meter is unchanged, delayed or quantized, do not infer a per-turn cost from it.
+
 ## Production architecture implication
 
 Migration from one-shot `codex exec` orchestration to Codex app-server should now appear on the LoopGolem roadmap as a serious post-v0.1 architecture item.
