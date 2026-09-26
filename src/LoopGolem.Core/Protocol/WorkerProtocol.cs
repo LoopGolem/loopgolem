@@ -82,6 +82,7 @@ public sealed record WorkerRequest(
     SessionReuseMode? SessionReuse = null,
     WorkerContextStrategy? WorkerContext = null,
     WorkerReasoningEffort? WorkerReasoning = null,
+    string? SupervisorSourceMissionId = null,
     string? FrozenPlannerResultJson = null,
     bool StopAfterPlanning = false);
 
