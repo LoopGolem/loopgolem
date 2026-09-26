@@ -25,7 +25,7 @@ public sealed class CodexWorkerSessionService(
         {
             var parentProviderThreadId =
                 await ResolveSupervisorProviderThreadAsync(
-                    mission.Id,
+                    mission,
                     cancellationToken)
                 ?? throw new InvalidOperationException(
                     "SupervisorFork requires an active persistent Supervisor thread.");
@@ -268,6 +268,64 @@ public sealed class CodexWorkerSessionService(
 
     private async Task<string?>
         ResolveSupervisorProviderThreadAsync(
+            Mission mission,
+            CancellationToken cancellationToken)
+    {
+        var local =
+            await ResolveActiveSupervisorThreadAsync(
+                mission.Id,
+                cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(local))
+        {
+            return local;
+        }
+
+        var sourceMissionId =
+            mission.Policy.SupervisorSourceMissionId;
+        if (string.IsNullOrWhiteSpace(
+                sourceMissionId))
+        {
+            return null;
+        }
+
+        var source =
+            await store.GetAsync(
+                sourceMissionId,
+                cancellationToken);
+        if (source is null ||
+            source.Mission.Status !=
+                MissionStatus.Paused ||
+            !source.Mission.Policy.StopAfterPlanning)
+        {
+            throw new InvalidOperationException(
+                "SupervisorFork source mission must be an existing paused plan-only mission.");
+        }
+
+        if (!string.Equals(
+                source.Mission.Goal,
+                mission.Goal,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                Path.GetFullPath(
+                    source.Mission.WorkspacePath),
+                Path.GetFullPath(
+                    mission.WorkspacePath),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "SupervisorFork source mission must match the measured mission goal and workspace.");
+        }
+
+        return await ResolveActiveSupervisorThreadAsync(
+            sourceMissionId,
+            cancellationToken);
+    }
+
+    private async Task<string?>
+        ResolveActiveSupervisorThreadAsync(
             string missionId,
             CancellationToken cancellationToken)
     {
@@ -282,6 +340,10 @@ public sealed class CodexWorkerSessionService(
                     AgentSessionRole.Supervisor &&
                 session.Status ==
                     AgentSessionStatus.Active &&
+                string.Equals(
+                    session.ReasoningEffort,
+                    "high",
+                    StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrWhiteSpace(
                     session.ProviderThreadId))
             .OrderByDescending(
