@@ -33,16 +33,22 @@ jobs:
       - name: Worker self-test
         run: dotnet run --project src/LoopGolem.Worker/LoopGolem.Worker.csproj --configuration Release --no-build -- --self-test
 
-      - name: Parse benchmark v3 runner
+      - name: Parse benchmark v3 PowerShell
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-            (Join-Path $PWD 'docs/benchmarks/benchmark-v3-runner.ps1'),
-            [ref]$tokens,
-            [ref]$errors)
-          if ($errors.Count -ne 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
+          foreach ($script in @(
+            'docs/benchmarks/benchmark-v3-runner.ps1',
+            'docs/benchmarks/taskforge-v3-acceptance.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD $script),
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -ne 0) {
+              Write-Error "PowerShell parse failed: $script"
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+            }
           }
