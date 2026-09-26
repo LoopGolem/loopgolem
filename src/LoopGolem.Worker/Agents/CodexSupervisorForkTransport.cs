@@ -389,7 +389,7 @@ public sealed class CodexSupervisorForkTransport(
                 Status = AgentSessionStatus.Closed,
                 LeaseOwnerTaskId = null,
                 TurnCount = 1,
-                MicrotaskCount = 1,
+                MicrotaskCount = 0,
                 TerminationReason = "supervisor_fork_child",
                 LastUsedAtUtc = completedAt,
                 UpdatedAtUtc = completedAt
