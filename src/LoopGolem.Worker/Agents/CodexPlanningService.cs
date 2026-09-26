@@ -133,7 +133,11 @@ public sealed class CodexPlanningService(
         return TaskExecutionResult.Succeeded(
             plan.Summary,
             JsonSerializer.Serialize(
-                new PlannerResult(baseCommit, plan),
+                new PlannerResult(baseCommit, plan)
+                {
+                    SupervisorProviderThreadId =
+                        run.ProviderThreadId
+                },
                 JsonOptions),
             run.TokenUsage);
     }
