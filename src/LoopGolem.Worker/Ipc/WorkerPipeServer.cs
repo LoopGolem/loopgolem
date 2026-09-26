@@ -184,7 +184,8 @@ public sealed class WorkerPipeServer(
 
                 if (request.SessionReuse is { } sessionReuse ||
                     request.WorkerContext is { } ||
-                    request.WorkerReasoning is { })
+                    request.WorkerReasoning is { } ||
+                    request.StopAfterPlanning)
                 {
                     policy = MissionPolicy.Default;
 
@@ -211,6 +212,26 @@ public sealed class WorkerPipeServer(
                             WorkerReasoning = requestedReasoning
                         };
                     }
+
+                    if (request.StopAfterPlanning)
+                    {
+                        policy = policy with
+                        {
+                            StopAfterPlanning = true
+                        };
+                    }
+                }
+
+                PlannerResult? frozenPlannerResult = null;
+                if (!string.IsNullOrWhiteSpace(
+                        request.FrozenPlannerResultJson))
+                {
+                    frozenPlannerResult =
+                        JsonSerializer.Deserialize<PlannerResult>(
+                            request.FrozenPlannerResultJson,
+                            JsonOptions)
+                        ?? throw new InvalidOperationException(
+                            "Frozen PlannerResult JSON was empty.");
                 }
 
                 var snapshot = await orchestrator.CreateMissionAsync(
@@ -218,7 +239,8 @@ public sealed class WorkerPipeServer(
                     request.WorkspacePath,
                     request.ExecutionMode,
                     cancellationToken,
-                    policy);
+                    policy,
+                    frozenPlannerResult);
 
                 _ = ExecuteMissionSafelyAsync(snapshot.Mission.Id);
                 return new WorkerResponse(
