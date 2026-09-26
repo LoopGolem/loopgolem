@@ -71,7 +71,7 @@ public sealed class CodexPlanningService(
                 task,
                 PlannerModel,
                 PlannerReasoning,
-                PlannerSchema,
+                PlannerPlannerWorkerSchema,
                 BuildPlannerPrompt(
                     mission,
                     capabilities),
@@ -617,7 +617,7 @@ public sealed class CodexPlanningService(
             task,
             WorkerModel,
             mission.Policy.EffectiveWorkerReasoningEffort,
-            WorkerSchema,
+            PlannerWorkerSchema,
             BuildWorkerPrompt(
                 definition,
                 capabilities),
@@ -836,6 +836,13 @@ public sealed class CodexPlanningService(
 
         Produce only the structured execution plan required by the schema.
 
+        COMMON ENVELOPE RULES:
+        - Set outcome to "plan".
+        - Set checks to an empty array.
+        - Set blocker to an empty string.
+        - Set contextReuse.recommended=false and contextReuse.reason to an empty string.
+        - tasks and finalChecks carry the actual planning result.
+
         RULES:
         - Prefer many small, independently verifiable microtasks over broad tasks.
         - Every task id must be short, unique, stable, and referenced by dependsOn.
@@ -1028,6 +1035,11 @@ public sealed class CodexPlanningService(
         EXECUTION CAPABILITIES:
         {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
 
+        COMMON ENVELOPE RULES:
+        - Set tasks to an empty array.
+        - Set finalChecks to an empty array.
+        - outcome, summary, checks, blocker and contextReuse carry the actual Worker result.
+
         RULES:
         - You execute only in the AGENT ENVIRONMENT.
         - Do not attempt a probed tool marked UNAVAILABLE in the agent environment, even if an acceptance check mentions it.
@@ -1181,36 +1193,6 @@ public sealed class CodexPlanningService(
         }
         """;
 
-    private const string WorkerSchema =
-        """
-        {
-          "type": "object",
-          "properties": {
-            "outcome": {
-              "type": "string",
-              "enum": ["changed", "already_satisfied", "blocked"]
-            },
-            "summary": { "type": "string" },
-            "checks": {
-              "type": "array",
-              "items": { "type": "string" }
-            },
-            "blocker": { "type": "string" },
-            "contextReuse": {
-              "type": "object",
-              "properties": {
-                "recommended": { "type": "boolean" },
-                "reason": { "type": "string" }
-              },
-              "required": ["recommended", "reason"],
-              "additionalProperties": false
-            }
-          },
-          "required": ["outcome", "summary", "checks", "blocker", "contextReuse"],
-          "additionalProperties": false
-        }
-        """;
-
     private const string ValidatorSchema =
         """
         {
@@ -1296,11 +1278,15 @@ public sealed class CodexPlanningService(
         }
         """;
 
-    private const string PlannerSchema =
+    private const string PlannerWorkerSchema =
         """
         {
           "type": "object",
           "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": ["plan", "changed", "already_satisfied", "blocked"]
+            },
             "summary": { "type": "string" },
             "tasks": {
               "type": "array",
@@ -1374,9 +1360,26 @@ public sealed class CodexPlanningService(
             "finalChecks": {
               "type": "array",
               "items": { "type": "string" }
+            },
+            "checks": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "blocker": { "type": "string" },
+            "contextReuse": {
+              "type": "object",
+              "properties": {
+                "recommended": { "type": "boolean" },
+                "reason": { "type": "string" }
+              },
+              "required": ["recommended", "reason"],
+              "additionalProperties": false
             }
           },
-          "required": ["summary", "tasks", "finalChecks"],
+          "required": [
+            "outcome", "summary", "tasks", "finalChecks",
+            "checks", "blocker", "contextReuse"
+          ],
           "additionalProperties": false
         }
         """;
