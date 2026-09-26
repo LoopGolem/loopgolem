@@ -35,6 +35,11 @@ public sealed record MissionPolicy(
     public WorkerReasoningEffort WorkerReasoning { get; init; } =
         WorkerReasoningEffort.Low;
 
+    // Experimental benchmark controls. Normal missions leave both unset.
+    public bool PauseAfterPlanning { get; init; }
+
+    public string? FrozenPlannerResultJson { get; init; }
+
     public WorkerContextStrategy EffectiveWorkerContextStrategy =>
         WorkerContext == WorkerContextStrategy.Legacy
             ? SessionReuse == SessionReuseMode.Affinity
