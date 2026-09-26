@@ -612,15 +612,24 @@ public sealed class CodexPlanningService(
                 "The persisted workspace snapshot could not be restored.");
         }
 
+        var useCommonEnvelope =
+            mission.Policy.EffectiveWorkerContextStrategy ==
+                WorkerContextStrategy.SupervisorFork;
+        var workerSchema =
+            useCommonEnvelope
+                ? PlannerWorkerSchema
+                : WorkerSchema;
+
         var run = await workerSessions.RunWorkAsync(
             mission,
             task,
             WorkerModel,
             mission.Policy.EffectiveWorkerReasoningEffort,
-            PlannerWorkerSchema,
+            workerSchema,
             BuildWorkerPrompt(
                 definition,
-                capabilities),
+                capabilities,
+                useCommonEnvelope),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -1012,10 +1021,22 @@ public sealed class CodexPlanningService(
 
     internal static string BuildWorkerPrompt(
         PlannedTask task,
-        MissionCapabilitySnapshot capabilities)
+        MissionCapabilitySnapshot capabilities,
+        bool useCommonEnvelope = false)
     {
         static string Lines(IEnumerable<string> values) =>
             string.Join(Environment.NewLine, values.Select(value => $"- {value}"));
+
+        var commonEnvelopeRules =
+            useCommonEnvelope
+                ? """
+                  COMMON ENVELOPE RULES:
+                  - Set tasks to an empty array.
+                  - Set finalChecks to an empty array.
+                  - outcome, summary, checks, blocker and contextReuse carry the actual Worker result.
+
+                  """
+                : string.Empty;
 
         return $"""
         TASK {task.Id}: {task.Title}
@@ -1035,12 +1056,7 @@ public sealed class CodexPlanningService(
         EXECUTION CAPABILITIES:
         {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
 
-        COMMON ENVELOPE RULES:
-        - Set tasks to an empty array.
-        - Set finalChecks to an empty array.
-        - outcome, summary, checks, blocker and contextReuse carry the actual Worker result.
-
-        RULES:
+        {commonEnvelopeRules}RULES:
         - You execute only in the AGENT ENVIRONMENT.
         - Do not attempt a probed tool marked UNAVAILABLE in the agent environment, even if an acceptance check mentions it.
         - Host-only checks are performed separately by LoopGolem. Do not return blocked solely because a host-only check cannot run in your environment.
@@ -1189,6 +1205,36 @@ public sealed class CodexPlanningService(
             }
           },
           "required": ["summary", "tasks"],
+          "additionalProperties": false
+        }
+        """;
+
+    private const string WorkerSchema =
+        """
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": ["changed", "already_satisfied", "blocked"]
+            },
+            "summary": { "type": "string" },
+            "checks": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "blocker": { "type": "string" },
+            "contextReuse": {
+              "type": "object",
+              "properties": {
+                "recommended": { "type": "boolean" },
+                "reason": { "type": "string" }
+              },
+              "required": ["recommended", "reason"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["outcome", "summary", "checks", "blocker", "contextReuse"],
           "additionalProperties": false
         }
         """;
