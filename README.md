@@ -28,6 +28,8 @@ Codex missions use a persistent GPT-6 Luna High Supervisor for planning/recovery
 
 The controlled TaskForge benchmark procedure is documented in [docs/benchmark-v2.md](docs/benchmark-v2.md).
 
+The current evidence-driven engineering roadmap is documented in [docs/roadmap.md](docs/roadmap.md).
+
 ## Development
 
 Requires the .NET 10 SDK.
