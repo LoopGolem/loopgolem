@@ -31,6 +31,7 @@ public sealed class WorkerPipeClient
         SessionReuseMode? sessionReuse = null,
         WorkerContextStrategy? workerContext = null,
         WorkerReasoningEffort? workerReasoning = null,
+        string? supervisorSourceMissionId = null,
         string? frozenPlannerResultJson = null,
         bool stopAfterPlanning = false,
         CancellationToken cancellationToken = default) =>
@@ -43,6 +44,8 @@ public sealed class WorkerPipeClient
                 SessionReuse: sessionReuse,
                 WorkerContext: workerContext,
                 WorkerReasoning: workerReasoning,
+                SupervisorSourceMissionId:
+                    supervisorSourceMissionId,
                 FrozenPlannerResultJson: frozenPlannerResultJson,
                 StopAfterPlanning: stopAfterPlanning),
             cancellationToken);
