@@ -71,7 +71,7 @@ public sealed class CodexPlanningService(
                 task,
                 PlannerModel,
                 PlannerReasoning,
-                PlannerPlannerWorkerSchema,
+                PlannerWorkerSchema,
                 BuildPlannerPrompt(
                     mission,
                     capabilities),
