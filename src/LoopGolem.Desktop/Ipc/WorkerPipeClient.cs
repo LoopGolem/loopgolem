@@ -24,6 +24,14 @@ public sealed class WorkerPipeClient
             TimeSpan.FromSeconds(60));
 
 
+    public Task<WorkerResponse> GetCodexAllowanceAsync(
+        CancellationToken cancellationToken = default) =>
+        SendAsync(
+            new WorkerRequest(
+                WorkerProtocol.GetCodexAllowance),
+            cancellationToken,
+            TimeSpan.FromSeconds(60));
+
     public Task<WorkerResponse> CreateMissionAsync(
         string goal,
         string workspacePath,
