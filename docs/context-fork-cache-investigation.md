@@ -553,3 +553,27 @@ The controlled TaskForge A1/B1 benchmark remains documented separately in:
 Those results showed that Fresh vs Affinity was not causally resolved: both missions reached `NeedsHumanAttention`, planning/failure modes diverged, and derived non-cached input was nearly equal even though B1 had much more cached raw input.
 
 Do not mix the TaskForge Affinity result with this fork/cache probe as if they were one experiment.
+
+
+## Probe C4 result — cache-positive control
+
+C4 completed successfully.
+
+| Run | Input | Cached | Cache hit | Ordinary | Output | Reasoning | Duration ms | Effort |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| parent HIGH / Planner | 20,371 | 0 | 0.00% | 20,371 | 41 | 0 | 4,009 | high |
+| HIGH warm/control 1 | 25,289 | 0 | 0.00% | 25,289 | 35 | 0 | 4,123 | high |
+| HIGH warm/control 2 | 25,289 | 25,088 | 99.21% | 201 | 35 | 0 | 3,574 | high |
+| LOW / Planner | 25,289 | 25,088 | 99.21% | 201 | 35 | 0 | 4,574 | low |
+| LOW / Worker | 25,131 | 0 | 0.00% | 25,131 | 48 | 0 | 4,934 | low |
+| HIGH final control | 25,289 | 25,088 | 99.21% | 201 | 35 | 0 | 3,444 | high |
+
+The dynamic HIGH -> LOW transition preserved the warmed cache when the Planner request shape was retained: both HIGH control A and LOW / Planner reported exactly 25,088 cached tokens out of 25,289 input.
+
+The final HIGH control again reported 25,088 cached tokens, so cache availability remained stable across the comparison window.
+
+LOW / Worker reported zero cached tokens. Since this arm changed both the structured-output contract and the role-specific follow-up text, C4 proves that the current Planner and Worker request shapes are not cache-compatible, but does not yet isolate whether schema, user text, or another rendered-request difference is the exact cause.
+
+Architectural implication: app-server fork lineage plus a dynamic HIGH -> LOW effort change is now experimentally supported as a cache-preserving path in the same-request-shape case. A follow-up experiment should isolate structured-output schema and role-specific prompt text separately before redesigning the production envelope.
+
+The account five-hour meter moved from 18% to 24% across the full C4 process. Per Q1, this coarse account-level percentage is not used as per-turn cost telemetry.
