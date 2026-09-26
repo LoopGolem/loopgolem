@@ -71,7 +71,7 @@ public sealed class CodexPlanningService(
                 task,
                 PlannerModel,
                 PlannerReasoning,
-                PlannerSchema,
+                PlannerWorkerSchema,
                 BuildPlannerPrompt(
                     mission,
                     capabilities),
@@ -613,7 +613,7 @@ public sealed class CodexPlanningService(
             task,
             WorkerModel,
             GetWorkerReasoning(mission.Policy),
-            WorkerSchema,
+            PlannerWorkerSchema,
             BuildWorkerPrompt(
                 definition,
                 capabilities),
@@ -831,6 +831,9 @@ public sealed class CodexPlanningService(
         {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
 
         Produce only the structured execution plan required by the schema.
+        This shared Planner/Worker schema contains Worker-only fields.
+        For this Planner turn set outcome="not_applicable", checks=[], blocker="",
+        and contextReuse={"recommended":false,"reason":""}.
 
         RULES:
         - Prefer many small, independently verifiable microtasks over broad tasks.
@@ -1025,6 +1028,7 @@ public sealed class CodexPlanningService(
         {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
 
         RULES:
+        - This shared Planner/Worker schema contains Planner-only fields. Set tasks=[] and finalChecks=[].
         - You execute only in the AGENT ENVIRONMENT.
         - Do not attempt a probed tool marked UNAVAILABLE in the agent environment, even if an acceptance check mentions it.
         - Host-only checks are performed separately by LoopGolem. Do not return blocked solely because a host-only check cannot run in your environment.
@@ -1101,6 +1105,189 @@ public sealed class CodexPlanningService(
         string.IsNullOrWhiteSpace(process.StandardError)
             ? process.StandardOutput.Trim()
             : process.StandardError.Trim();
+
+    private const string PlannerWorkerSchema =
+        """
+        {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "tasks": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "executor": {
+                    "type": "string",
+                    "enum": [
+                      "deterministic",
+                      "luna_low"
+                    ]
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "readFiles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "writeFiles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "acceptanceChecks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "dependsOn": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "rerunAfterRepair": {
+                    "type": "boolean"
+                  },
+                  "deterministic": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "write_file",
+                          "create_directory",
+                          "rename_path",
+                          "run_command"
+                        ]
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "string"
+                      },
+                      "sourcePath": {
+                        "type": "string"
+                      },
+                      "destinationPath": {
+                        "type": "string"
+                      },
+                      "executable": {
+                        "type": "string"
+                      },
+                      "arguments": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "workingDirectory": {
+                        "type": "string"
+                      },
+                      "timeoutSeconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 900
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "path",
+                      "content",
+                      "sourcePath",
+                      "destinationPath",
+                      "executable",
+                      "arguments",
+                      "workingDirectory",
+                      "timeoutSeconds"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "executor",
+                  "prompt",
+                  "readFiles",
+                  "writeFiles",
+                  "acceptanceChecks",
+                  "dependsOn",
+                  "rerunAfterRepair",
+                  "deterministic"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "finalChecks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "changed",
+                "already_satisfied",
+                "blocked",
+                "not_applicable"
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "blocker": {
+              "type": "string"
+            },
+            "contextReuse": {
+              "type": "object",
+              "properties": {
+                "recommended": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "recommended",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "summary",
+            "tasks",
+            "finalChecks",
+            "outcome",
+            "checks",
+            "blocker",
+            "contextReuse"
+          ],
+          "additionalProperties": false
+        }
+        """;
 
     private const string RecoverySchema =
         """
