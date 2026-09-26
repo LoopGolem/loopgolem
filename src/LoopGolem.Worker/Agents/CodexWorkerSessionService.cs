@@ -6,7 +6,8 @@ namespace LoopGolem.Worker.Agents;
 
 public sealed class CodexWorkerSessionService(
     ICodexSessionTransport transport,
-    IMissionStore store)
+    IMissionStore store,
+    ICodexSupervisorForkTransport? forkTransport = null)
 {
     private const int MinimumAffinityScore = 3;
 
@@ -19,6 +20,32 @@ public sealed class CodexWorkerSessionService(
         string prompt,
         CancellationToken cancellationToken = default)
     {
+        if (mission.Policy.EffectiveWorkerContext ==
+            WorkerContextStrategy.SupervisorFork)
+        {
+            var parentProviderThreadId =
+                await ResolveSupervisorProviderThreadAsync(
+                    mission.Id,
+                    cancellationToken)
+                ?? throw new InvalidOperationException(
+                    "SupervisorFork requires an active persistent Supervisor thread.");
+
+            var fork =
+                forkTransport ??
+                throw new InvalidOperationException(
+                    "SupervisorFork transport is unavailable.");
+
+            return await fork.RunForkedWorkerAsync(
+                mission,
+                task,
+                parentProviderThreadId,
+                model,
+                reasoningEffort,
+                schema,
+                prompt,
+                cancellationToken);
+        }
+
         if (mission.Policy.EffectiveWorkerContext ==
             WorkerContextStrategy.Fresh)
         {
@@ -237,6 +264,32 @@ public sealed class CodexWorkerSessionService(
                 updated.Id,
                 CancellationToken.None);
         }
+    }
+
+    private async Task<string?>
+        ResolveSupervisorProviderThreadAsync(
+            string missionId,
+            CancellationToken cancellationToken)
+    {
+        var sessions =
+            await store.ListAgentSessionsAsync(
+                missionId,
+                cancellationToken);
+
+        return sessions
+            .Where(session =>
+                session.Role ==
+                    AgentSessionRole.Supervisor &&
+                session.Status ==
+                    AgentSessionStatus.Active &&
+                !string.IsNullOrWhiteSpace(
+                    session.ProviderThreadId))
+            .OrderByDescending(
+                session =>
+                    session.LastUsedAtUtc)
+            .Select(session =>
+                session.ProviderThreadId)
+            .FirstOrDefault();
     }
 
     private async Task<AgentSession?>
