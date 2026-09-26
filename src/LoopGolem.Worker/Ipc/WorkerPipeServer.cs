@@ -4,14 +4,16 @@ using LoopGolem.Core.Domain;
 using LoopGolem.Core.Protocol;
 using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Infrastructure;
+using LoopGolem.Worker.Agents;
 
 namespace LoopGolem.Worker.Ipc;
 
 public sealed class WorkerPipeServer(
     IMissionStore store,
     IMissionOrchestrator orchestrator,
-    LoopGolem.Worker.Agents.CodexCliService codex,
-    MissionTelemetryService telemetry)
+    CodexCliService codex,
+    MissionTelemetryService telemetry,
+    ICodexWorkerAppServerTransport appServerTransport)
 {
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
@@ -162,6 +164,12 @@ public sealed class WorkerPipeServer(
                     true,
                     CodexStatus: await codex.GetStatusAsync(cancellationToken));
 
+            case WorkerProtocol.GetCodexAllowance:
+                return new WorkerResponse(
+                    true,
+                    CodexAllowance:
+                        await appServerTransport.ReadAllowanceAsync(
+                            cancellationToken));
 
             case WorkerProtocol.CreateMission:
             {
