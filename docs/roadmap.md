@@ -2,7 +2,7 @@
 
 This roadmap records the current engineering priorities for LoopGolem. It is intentionally evidence-driven: experimental findings should change priorities before large implementation work begins.
 
-Last updated after the controlled C5 schema-vs-role-text experiment on 2026-09-26.
+Last updated after C5 and the allowance-strategy implementation work on 2026-09-26.
 
 ## Current baseline
 
@@ -60,11 +60,28 @@ The C5 script contained an extra exact-equality guard for Control A vs Control B
 
 See `docs/context-fork-cache-investigation.md` for the complete result and limitations.
 
+## P0.5 — Allowance-strategy benchmark
+
+C4/C5 proved that Supervisor fork lineage can preserve a warm prompt cache when Planner and Worker use a stable structured-output schema. Separate observations of the included five-hour allowance, however, suggest that prompt-cache telemetry may not predict subscription-window consumption.
+
+Before optimizing further for cached-token economics, compare two complete execution policies against the exact same frozen PlannerResult:
+
+- **SupervisorFork + Low**: inherit the persistent HIGH Supervisor context, then lower the child on `turn/start`;
+- **Fresh + High**: give each bounded microtask to a fresh HIGH Worker with no Supervisor lineage.
+
+This is a product-strategy benchmark rather than a single-variable causal experiment. Its primary metric is useful completed work per visible five-hour allowance point. Raw input/cached/cache-write/output/reasoning telemetry remains mandatory but secondary.
+
+Implementation support now includes explicit Worker context/reasoning policy, shared Planner/Worker structured output, an experimental app-server SupervisorFork transport, plan-only missions, and missions created from a frozen PlannerResult.
+
+Do not select the product default until the implementation builds/self-tests successfully and the controlled benchmark in `docs/benchmark-v3-allowance-strategy.md` has been run.
+
+Regardless of the winner, preserve both execution policies because token-equivalent economics and included-plan allowance economics may favor different shapes.
+
 ## P1 — Stable agent-turn envelope
 
-C5 identifies the current PlannerSchema/WorkerSchema divergence as the primary cache-breaking component. The next design step is therefore to prototype a stable/common structured-output envelope while keeping role semantics distinct.
+C5 identified the former PlannerSchema/WorkerSchema divergence as the primary cache-breaking component. A shared Planner/Worker structured-output envelope is now implemented for the experimental strategy work.
 
-Do not jump directly to production migration. First define the smallest viable common envelope and measure both its rendered-token overhead and its cache behavior against the current separate schemas.
+Further envelope optimization is paused until the allowance-strategy benchmark determines whether preserving inherited prompt cache is actually beneficial for the included five-hour Codex allowance.
 
 Preferred direction:
 
