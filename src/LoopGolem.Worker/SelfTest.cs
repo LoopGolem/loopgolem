@@ -113,6 +113,11 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!VerifyPlannerWorkerEnvelopeSchema())
+            {
+                return 1;
+            }
+
             if (!await VerifyMissionTelemetrySummaryAsync(
                     root))
             {
@@ -788,6 +793,86 @@ internal static class SelfTest
         }
 
         return false;
+    }
+
+    private static bool VerifyPlannerWorkerEnvelopeSchema()
+    {
+        try
+        {
+            using var document =
+                JsonDocument.Parse(
+                    CodexPlanningService.PlannerWorkerSchema);
+            var root = document.RootElement;
+            var properties =
+                root.GetProperty("properties");
+            var required =
+                root.GetProperty("required")
+                    .EnumerateArray()
+                    .Select(value =>
+                        value.GetString())
+                    .ToHashSet(
+                        StringComparer.Ordinal);
+
+            string[] expectedRequired =
+            [
+                "outcome",
+                "summary",
+                "tasks",
+                "finalChecks",
+                "checks",
+                "blocker",
+                "contextReuse"
+            ];
+
+            if (expectedRequired.Any(
+                    name =>
+                        !required.Contains(name)) ||
+                !properties.TryGetProperty(
+                    "tasks",
+                    out _) ||
+                !properties.TryGetProperty(
+                    "contextReuse",
+                    out _))
+            {
+                Console.Error.WriteLine(
+                    "Self-test Planner/Worker common schema is incomplete.");
+                return false;
+            }
+
+            var outcomeValues =
+                properties.GetProperty("outcome")
+                    .GetProperty("enum")
+                    .EnumerateArray()
+                    .Select(value =>
+                        value.GetString())
+                    .ToHashSet(
+                        StringComparer.Ordinal);
+
+            if (!outcomeValues.SetEquals(
+                    [
+                        "plan",
+                        "changed",
+                        "already_satisfied",
+                        "blocked"
+                    ]))
+            {
+                Console.Error.WriteLine(
+                    "Self-test Planner/Worker common schema outcome contract changed.");
+                return false;
+            }
+        }
+        catch (Exception exception)
+            when (exception is
+                JsonException or
+                KeyNotFoundException or
+                InvalidOperationException)
+        {
+            Console.Error.WriteLine(
+                $"Self-test Planner/Worker common schema is invalid: {exception.Message}");
+            return false;
+        }
+
+        return true;
     }
 
     private static async Task<bool>
@@ -3736,35 +3821,46 @@ internal static class SelfTest
         var forkTask =
             CreateAffinityTask(
                 forkMissionId,
-                1,
+                2,
                 "fork-low",
                 [],
                 ["src/fork.cs"],
                 []);
 
+        const string supervisorThread =
+            "self-test-supervisor-thread";
+        var frozenPlan =
+            new PlannerResult(
+                "self-test-base",
+                new MissionPlan(
+                    "Frozen test plan.",
+                    [],
+                    []))
+            {
+                SupervisorProviderThreadId =
+                    supervisorThread
+            };
+        var planTask =
+            new MissionTask(
+                Guid.NewGuid().ToString("N"),
+                forkMissionId,
+                1,
+                MissionTaskKind.PlanMission,
+                "Frozen planning seed",
+                null,
+                DomainTaskStatus.Completed,
+                "Frozen test plan.",
+                JsonSerializer.Serialize(
+                    frozenPlan,
+                    JsonOptions),
+                null,
+                now,
+                now);
+
         await store.CreateAsync(
             new MissionSnapshot(
                 forkMission,
-                [forkTask]));
-
-        const string supervisorThread =
-            "self-test-supervisor-thread";
-        await store.UpsertAgentSessionAsync(
-            new AgentSession(
-                $"supervisor-{Guid.NewGuid():N}",
-                forkMissionId,
-                AgentSessionRole.Supervisor,
-                CodexPlanningService.PlannerModel,
-                CodexPlanningService.PlannerReasoning,
-                supervisorThread,
-                AgentSessionStatus.Active,
-                null,
-                1,
-                0,
-                null,
-                now,
-                now,
-                now));
+                [planTask, forkTask]));
 
         var forkRun =
             await service.RunWorkAsync(
