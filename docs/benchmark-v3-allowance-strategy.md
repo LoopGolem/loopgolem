@@ -207,18 +207,17 @@ It is **inconclusive as an F/H strategy comparison**:
   is not a cost result;
 - Arm H completed the LoopGolem mission with 1,005,320 reported mission tokens
   and moved both the programmatic and visible five-hour meters by one point;
-- Arm H's external acceptance harness aborted on Windows PowerShell 5.1 while
-  intentionally testing a non-zero invalid-ID command, so its external
-  functional result remains unresolved.
+- Arm H's original external acceptance capture aborted on Windows PowerShell
+  5.1 while intentionally testing a non-zero invalid-ID command; after the
+  harness fix, the preserved H artifact passed the complete external
+  acceptance suite with no new model inference.
 
 Before another complete paired run:
 
 1. explicitly configure the fork child as HIGH during `thread/fork`;
-2. rerun the acceptance harness against the preserved H artifact without model
-   inference;
-3. run the no-turn model-identity probe for old-style unpinned versus pinned
+2. run the no-turn model-identity probe for old-style unpinned versus pinned
    fork requests;
-4. run a narrow F-only smoke/measurement;
-5. repeat the paired benchmark only after F has executed real Worker turns.
+3. run a narrow F-only smoke/measurement;
+4. repeat the paired benchmark only after F has executed real Worker turns.
 
 Do not use the first F allowance delta to claim fork-cost superiority.
