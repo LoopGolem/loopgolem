@@ -112,3 +112,8 @@ jobs:
           if (($captured | Out-String) -notmatch 'expected-native-stderr') {
             throw "Expected native stderr was not captured."
           }
+
+          # GitHub's Windows PowerShell wrapper propagates the last native
+          # process exit code after the script body. The non-zero exit above
+          # was intentional and already asserted, so clear it after the probe.
+          $global:LASTEXITCODE = 0
