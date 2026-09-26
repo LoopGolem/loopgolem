@@ -37,7 +37,8 @@ public sealed partial class MissionOrchestrator : IMissionOrchestrator
         string workspacePath,
         MissionExecutionMode executionMode,
         CancellationToken cancellationToken = default,
-        MissionPolicy? policy = null)
+        MissionPolicy? policy = null,
+        PlannerResult? frozenPlannerResult = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(goal);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
@@ -61,6 +62,66 @@ public sealed partial class MissionOrchestrator : IMissionOrchestrator
                     MissionPolicy.Default
             },
             CreateInitialPlan(missionId, executionMode, now));
+
+        if (frozenPlannerResult is not null)
+        {
+            if (executionMode != MissionExecutionMode.Codex)
+            {
+                throw new InvalidOperationException(
+                    "A frozen PlannerResult is valid only for Codex missions.");
+            }
+
+            if (string.IsNullOrWhiteSpace(
+                    frozenPlannerResult.BaseCommit))
+            {
+                throw new InvalidOperationException(
+                    "Frozen PlannerResult requires a base commit.");
+            }
+
+            var planError =
+                MissionPlanValidator.Validate(
+                    frozenPlannerResult.Plan);
+            if (planError is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Frozen PlannerResult is invalid: {planError}");
+            }
+
+            var plannerTask =
+                snapshot.Tasks.Single(task =>
+                    task.Kind ==
+                        MissionTaskKind.PlanMission);
+
+            plannerTask = plannerTask with
+            {
+                Status = DomainTaskStatus.Completed,
+                Result = frozenPlannerResult.Plan.Summary,
+                ResultDetails =
+                    JsonSerializer.Serialize(
+                        frozenPlannerResult,
+                        JsonOptions),
+                UpdatedAtUtc = now
+            };
+
+            snapshot =
+                ReplaceTask(
+                    snapshot,
+                    plannerTask);
+
+            var expansion =
+                ExpandPlannerResult(
+                    snapshot,
+                    plannerTask,
+                    now);
+
+            if (expansion.Error is not null)
+            {
+                throw new InvalidOperationException(
+                    expansion.Error);
+            }
+
+            snapshot = expansion.Snapshot!;
+        }
 
         snapshot = UpdateReadyStates(snapshot, now);
         await _store.CreateAsync(snapshot, cancellationToken);
@@ -547,6 +608,31 @@ public sealed partial class MissionOrchestrator : IMissionOrchestrator
                     }
 
                     snapshot = expansion.Snapshot!;
+
+                    if (snapshot.Mission.Policy.StopAfterPlanning)
+                    {
+                        snapshot = snapshot with
+                        {
+                            Mission = snapshot.Mission with
+                            {
+                                Status = MissionStatus.Paused,
+                                Result =
+                                    "PlannerResult captured for controlled benchmark use.",
+                                Error = null,
+                                UpdatedAtUtc = finishedAt
+                            }
+                        };
+
+                        snapshot = UpdateReadyStates(
+                            snapshot,
+                            finishedAt);
+
+                        await _store.UpdateAsync(
+                            snapshot,
+                            cancellationToken);
+
+                        return snapshot;
+                    }
                 }
                 else if (
                     completed.Kind == MissionTaskKind.ValidateMission)
