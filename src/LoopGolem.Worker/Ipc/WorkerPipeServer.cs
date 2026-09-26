@@ -184,7 +184,10 @@ public sealed class WorkerPipeServer(
 
                 if (request.SessionReuse is { } sessionReuse ||
                     request.WorkerContext is not null ||
-                    request.WorkerReasoning is not null)
+                    request.WorkerReasoning is not null ||
+                    request.PauseAfterPlanning ||
+                    !string.IsNullOrWhiteSpace(
+                        request.FrozenPlannerResultJson))
                 {
                     policy =
                         MissionPolicy.Default;
@@ -212,6 +215,24 @@ public sealed class WorkerPipeServer(
                         {
                             WorkerReasoning =
                                 workerReasoning
+                        };
+                    }
+
+                    if (request.PauseAfterPlanning)
+                    {
+                        policy = policy with
+                        {
+                            PauseAfterPlanning = true
+                        };
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(
+                            request.FrozenPlannerResultJson))
+                    {
+                        policy = policy with
+                        {
+                            FrozenPlannerResultJson =
+                                request.FrozenPlannerResultJson
                         };
                     }
                 }
