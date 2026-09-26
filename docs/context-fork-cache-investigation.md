@@ -584,3 +584,51 @@ The account five-hour meter moved from 18% to 24% across the full C4 process. Pe
 Immediately after C4, the ChatGPT usage UI showed **76% remaining** in the five-hour window, i.e. **24% used**, with no separate Codex use reported during the interval. This independently matches C4's explicit app-server snapshots of 18% before and 24% after.
 
 This strengthens the conclusion that the account-level meter genuinely advanced by six visible percentage points during the C4 observation window. It still does not make the meter suitable for per-turn attribution: the six points cannot be assigned reliably among the parent, warm controls, LOW Planner, LOW Worker, final HIGH control, or delayed accounting from earlier activity.
+
+## Probe C5 result — schema vs role text isolation
+
+C5 isolated the two request-shape changes that were confounded in C4: structured-output schema and role-specific user text.
+
+All comparison children forked from the same immutable HIGH parent checkpoint, inherited HIGH at fork time, and changed to GPT-6 Luna Low only through `turn/start effort=low`. The warm-up stage used HIGH only and the comparison did not proceed until a cache-positive control existed.
+
+Results:
+
+| Run | Input | Cached | Cache write | Cache hit | Output | Reasoning | Duration ms | Effort |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| parent HIGH / Planner | 20,371 | 12,032 | 0 | 59.06% | 82 | 45 | 5,732 | high |
+| HIGH warm 1 | 25,324 | 0 | 0 | 0.00% | 47 | 20 | 5,974 | high |
+| HIGH warm 2 | 25,324 | 25,088 | 0 | 99.07% | 54 | 24 | 4,205 | high |
+| Control A / PlannerSchema + neutral text | 25,324 | 25,088 | 0 | 99.07% | 37 | 15 | 4,222 | low |
+| Schema-only / WorkerSchema + same neutral text | 25,152 | 0 | 0 | 0.00% | 63 | 14 | 4,960 | low |
+| Text-only / PlannerSchema + Worker-style text | 25,349 | 25,088 | 0 | 98.97% | 118 | 90 | 6,516 | low |
+| Control B / PlannerSchema + original neutral text | 25,324 | 25,216 | 0 | 99.57% | 41 | 14 | 3,994 | low |
+
+### Interpretation
+
+C5 provides strong evidence that the structured-output schema change is the primary cache-breaking component observed in C4.
+
+The decisive comparison is:
+
+- Control A used PlannerSchema plus the neutral text and cached 25,088 input tokens.
+- Schema-only changed only PlannerSchema -> WorkerSchema while keeping the same neutral text, and cached input fell to zero.
+- Text-only retained PlannerSchema but changed the user text to a Worker-style instruction, and the same 25,088-token cached prefix remained available.
+
+The final Control B remained strongly cache-positive and used the same total input as Control A. It reported 25,216 cached tokens, 128 more than Control A. This does not represent a control-cache loss. The preregistered C5 invalidation rule was to avoid causal interpretation if Control B lost the cache hit; that condition did not occur.
+
+The probe script additionally contained a stricter, non-preregistered guard requiring exact equality between Control A and Control B token dimensions. That guard classified the run as `inconclusive_control_drift`. In retrospect, exact equality was unnecessarily strict: the final control retained and slightly expanded the cached prefix rather than losing it. The scientific interpretation follows the experiment design recorded before the run, not that extra implementation guard.
+
+C5 therefore resolves the main C4 ambiguity:
+
+1. dynamic HIGH -> LOW still preserves a warmed prefix when the structured-output schema remains stable;
+2. changing the role-specific user text alone did not destroy that warmed prefix in this probe;
+3. changing PlannerSchema -> WorkerSchema alone destroyed the observed warmed prefix completely;
+4. the next design work should prioritize a stable/common structured-output envelope before optimizing role-text placement.
+
+This does not prove that every arbitrary schema change always causes a full miss, nor that role text can never matter. It establishes the behavior of the current PlannerSchema/WorkerSchema pair under this controlled forked-context protocol.
+
+### Five-hour allowance observation
+
+The user observed an additional six visible percentage points consumed from the five-hour allowance around the C5 testing window. The setup failures preceding the successful run aborted before any model turn, but per Q1 the account-level percentage remains coarse, integer-valued and potentially delayed/coalesced. Do not assign those six points to individual C5 turns or derive per-turn cost from the UI meter.
+
+Raw per-turn token telemetry remains the primary experimental measurement.
+
