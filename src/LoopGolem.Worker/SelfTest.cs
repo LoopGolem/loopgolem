@@ -3697,6 +3697,25 @@ internal static class SelfTest
                     forkTask
                 ]));
 
+        var measuredLocalThreadId =
+            $"measured-local-supervisor-{Guid.NewGuid():N}";
+        await store.UpsertAgentSessionAsync(
+            new AgentSession(
+                $"measured-local-supervisor-session-{Guid.NewGuid():N}",
+                measuredMissionId,
+                AgentSessionRole.Supervisor,
+                CodexPlanningService.PlannerModel,
+                CodexPlanningService.PlannerReasoning,
+                measuredLocalThreadId,
+                AgentSessionStatus.Active,
+                null,
+                1,
+                0,
+                null,
+                now,
+                now,
+                now));
+
         var forkTransport =
             new FakeSupervisorForkTransport();
         var forkService =

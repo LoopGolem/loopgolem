@@ -271,22 +271,14 @@ public sealed class CodexWorkerSessionService(
             Mission mission,
             CancellationToken cancellationToken)
     {
-        var local =
-            await ResolveActiveSupervisorThreadAsync(
-                mission.Id,
-                cancellationToken);
-
-        if (!string.IsNullOrWhiteSpace(local))
-        {
-            return local;
-        }
-
         var sourceMissionId =
             mission.Policy.SupervisorSourceMissionId;
         if (string.IsNullOrWhiteSpace(
                 sourceMissionId))
         {
-            return null;
+            return await ResolveActiveSupervisorThreadAsync(
+                mission.Id,
+                cancellationToken);
         }
 
         var source =
