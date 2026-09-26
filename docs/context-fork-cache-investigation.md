@@ -577,3 +577,10 @@ LOW / Worker reported zero cached tokens. Since this arm changed both the struct
 Architectural implication: app-server fork lineage plus a dynamic HIGH -> LOW effort change is now experimentally supported as a cache-preserving path in the same-request-shape case. A follow-up experiment should isolate structured-output schema and role-specific prompt text separately before redesigning the production envelope.
 
 The account five-hour meter moved from 18% to 24% across the full C4 process. Per Q1, this coarse account-level percentage is not used as per-turn cost telemetry.
+
+
+### C4 allowance UI corroboration
+
+Immediately after C4, the ChatGPT usage UI showed **76% remaining** in the five-hour window, i.e. **24% used**, with no separate Codex use reported during the interval. This independently matches C4's explicit app-server snapshots of 18% before and 24% after.
+
+This strengthens the conclusion that the account-level meter genuinely advanced by six visible percentage points during the C4 observation window. It still does not make the meter suitable for per-turn attribution: the six points cannot be assigned reliably among the parent, warm controls, LOW Planner, LOW Worker, final HIGH control, or delayed accounting from earlier activity.
