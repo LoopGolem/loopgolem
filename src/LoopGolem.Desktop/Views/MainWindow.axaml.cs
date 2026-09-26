@@ -75,7 +75,8 @@ public partial class MainWindow : Window
         var selectedStrategy =
             WorkerStrategyComboBox.SelectedIndex;
         WorkerStrategyComboBox.ItemsSource =
-        [
+            new WorkerStrategyOption[]
+            {
             new WorkerStrategyOption(
                 LocalizationService.Get("WorkerStrategyAffinityLow"),
                 SessionReuseMode.Affinity,
@@ -96,7 +97,7 @@ public partial class MainWindow : Window
                 SessionReuseMode.Disabled,
                 WorkerContextStrategy.Fresh,
                 WorkerReasoningEffort.Low)
-        ];
+            };
         WorkerStrategyComboBox.SelectedIndex =
             selectedStrategy >= 0
                 ? Math.Min(selectedStrategy, 3)
