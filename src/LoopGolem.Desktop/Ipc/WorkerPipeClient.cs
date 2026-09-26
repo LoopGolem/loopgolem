@@ -31,6 +31,8 @@ public sealed class WorkerPipeClient
         SessionReuseMode? sessionReuse = null,
         WorkerContextStrategy? workerContext = null,
         WorkerReasoningEffort? workerReasoning = null,
+        bool pauseAfterPlanning = false,
+        string? frozenPlannerResultJson = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             new WorkerRequest(
@@ -40,7 +42,10 @@ public sealed class WorkerPipeClient
                 ExecutionMode: executionMode,
                 SessionReuse: sessionReuse,
                 WorkerContext: workerContext,
-                WorkerReasoning: workerReasoning),
+                WorkerReasoning: workerReasoning,
+                PauseAfterPlanning: pauseAfterPlanning,
+                FrozenPlannerResultJson:
+                    frozenPlannerResultJson),
             cancellationToken);
 
     public Task<WorkerResponse> GetMissionAsync(
