@@ -29,6 +29,8 @@ public sealed class WorkerPipeClient
         string workspacePath,
         MissionExecutionMode executionMode,
         SessionReuseMode? sessionReuse = null,
+        WorkerContextStrategy? workerContext = null,
+        WorkerReasoningEffort? workerReasoning = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             new WorkerRequest(
@@ -36,7 +38,9 @@ public sealed class WorkerPipeClient
                 Goal: goal,
                 WorkspacePath: workspacePath,
                 ExecutionMode: executionMode,
-                SessionReuse: sessionReuse),
+                SessionReuse: sessionReuse,
+                WorkerContext: workerContext,
+                WorkerReasoning: workerReasoning),
             cancellationToken);
 
     public Task<WorkerResponse> GetMissionAsync(
