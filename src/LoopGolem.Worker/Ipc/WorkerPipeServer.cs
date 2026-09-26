@@ -182,7 +182,7 @@ public sealed class WorkerPipeServer(
 
                 MissionPolicy? policy = null;
 
-                if (request.SessionReuse is { } sessionReuse ||
+                if (request.SessionReuse is { } ||
                     request.WorkerContext is { } ||
                     request.WorkerReasoning is { } ||
                     request.StopAfterPlanning)
