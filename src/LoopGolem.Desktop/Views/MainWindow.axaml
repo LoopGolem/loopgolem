@@ -22,11 +22,12 @@
         <TextBlock x:Name="WorkerStatusText" Grid.Column="2" />
         <TextBlock x:Name="CodexLabel" Grid.Column="4" FontWeight="SemiBold" />
         <TextBlock x:Name="CodexStatusText" Grid.Column="6" />
-        <CheckBox
-            x:Name="ReuseLowContextCheckBox"
+        <ComboBox
+            x:Name="WorkerStrategyComboBox"
             Grid.Column="8"
+            Width="250"
             VerticalAlignment="Center"
-            IsChecked="True"
+            SelectedIndex="0"
             IsEnabled="False" />
       </Grid>
 
