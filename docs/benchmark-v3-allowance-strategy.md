@@ -174,3 +174,18 @@ Persisted missions created before these fields existed continue to derive their 
 For a frozen SupervisorFork mission, the Worker service validates that the source mission is paused, was created with `StopAfterPlanning=true`, matches the goal/workspace, has an active HIGH Supervisor thread, and carries the exact same persisted PlannerResult as the measured mission. This preserves the real planning context without a second Planner call or a synthetic Supervisor transplant.
 
 The SupervisorFork path is experimental until it passes this controlled benchmark.
+
+## Reference runner
+
+A Windows/WSL PowerShell runner is versioned at
+`docs/benchmarks/benchmark-v3-runner.ps1`. It performs the deterministic
+build/self-test gate before any Planner call, uses one isolated
+`LOOPGOLEM_STATE_DIR`, freezes and hashes one PlannerResult, restores the
+disposable target workspace before each measured arm, samples the five-hour
+allowance through `account/rateLimits/read`, and records both mission
+responses and telemetry.
+
+The runner deliberately does not choose a winner. Both arms must first satisfy
+the success criteria above. It requires the exact benchmark prompt in a file
+and an external acceptance-test PowerShell script that accepts
+`-Workspace <path>` and exits 0 only on success.

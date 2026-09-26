@@ -37,6 +37,17 @@ LoopGolem invokes Codex through `bash -lc` inside the selected distribution so t
 
 On Linux, LoopGolem invokes the native Codex CLI directly.
 
+## Worker state directory
+
+LoopGolem persists mission/orchestration state in a local SQLite database. The
+default state directory is `%LOCALAPPDATA%\\LoopGolem` on Windows and the
+platform-specific XDG/local-state path on Linux.
+
+Set `LOOPGOLEM_STATE_DIR` before starting the Worker to use an explicit state
+directory. This is intended for isolated tests and controlled benchmarks; it
+does not change Codex authentication or the target workspace. All Worker
+processes that must share persisted mission/session state need the same value.
+
 ## Model policy
 
 LoopGolem does not inherit the user's Codex default model.
