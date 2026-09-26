@@ -79,7 +79,9 @@ public sealed record WorkerRequest(
     string? Goal = null,
     string? WorkspacePath = null,
     MissionExecutionMode ExecutionMode = MissionExecutionMode.Codex,
-    SessionReuseMode? SessionReuse = null);
+    SessionReuseMode? SessionReuse = null,
+    WorkerContextStrategy? WorkerContext = null,
+    WorkerReasoningEffort? WorkerReasoning = null);
 
 public sealed record WorkerResponse(
     bool Success,
