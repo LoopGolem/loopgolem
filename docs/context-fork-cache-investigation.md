@@ -368,6 +368,38 @@ Required experimental discipline:
 
 The objective of the next probe is therefore not “run the four arms again”; it is “obtain a cache-positive control, then isolate effort and schema changes before that cache state disappears.”
 
+## GPT-6 Luna identity and 5-hour allowance observation
+
+After Probe 3C, the app-server trace was inspected to verify the model actually associated with the parent thread rather than trusting only the requested slug.
+
+The `thread/start` response reported:
+
+```text
+model:           gpt-6-luna
+modelProvider:   openai
+serviceTier:     null
+reasoningEffort: high
+```
+
+This rules out the hypothesis that the probe silently fell back to GPT-6 Astra or GPT-6 Sol at thread creation.
+
+During the same 3C run, `account/rateLimits/updated` notifications for the primary 300-minute window reported:
+
+| Local time | Used percent |
+| --- | ---: |
+| 00:25:31 | 10% |
+| 00:25:36 | 10% |
+| 00:25:40 | 13% |
+| 00:25:46 | 15% |
+
+Do not attribute these deltas directly to individual turns. In Codex 0.156.1, `account/rateLimits/updated` is an account-level sparse rolling snapshot and carries no thread id or turn id. It is not a per-turn billing/debit event. Backend accounting may be delayed, coalesced or quantized relative to individual model completions.
+
+The observation is nevertheless significant: the account-level five-hour meter increased by five percentage points during the short interval covering the 3C probe. This appears unexpectedly large relative to earlier LoopGolem missions and warrants a separate allowance-meter investigation before more quota-intensive cache probes.
+
+Current official documentation says Work and Codex share the included plan allowance and that actual usage depends on model, task size, reasoning settings and amount of work. GPT-6 Luna is an official Work/Codex model and is also substantially cheaper per token than GPT-6 Sol/Astra in current token-based pricing. The included five-hour meter must therefore not be inferred directly from raw token counts or API-equivalent dollar pricing.
+
+Next allowance investigation should use explicit `account/rateLimits/read` snapshots immediately before and after a deliberately tiny, isolated single turn, with no concurrent Work/Codex activity, then repeat by effort/model if needed. The purpose is to characterize meter behavior, not to assume each rolling notification is a turn-scoped charge.
+
 ## Production architecture implication
 
 Migration from one-shot `codex exec` orchestration to Codex app-server should now appear on the LoopGolem roadmap as a serious post-v0.1 architecture item.
