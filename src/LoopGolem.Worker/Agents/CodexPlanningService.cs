@@ -833,7 +833,7 @@ public sealed class CodexPlanningService(
         Produce only the structured execution plan required by the schema.
         This shared Planner/Worker schema contains Worker-only fields.
         For this Planner turn set outcome="not_applicable", checks=[], blocker="",
-        and contextReuse={"recommended":false,"reason":""}.
+        and contextReuse={{"recommended":false,"reason":""}}.
 
         RULES:
         - Prefer many small, independently verifiable microtasks over broad tasks.
