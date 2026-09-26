@@ -71,17 +71,15 @@ The first controlled TaskForge v3 run on 2026-09-26 compared the intended polici
 - The fork model-mismatch guard did not fire before the effort guard, so the attempted pinned child matched the requested `gpt-6-luna` model in this run.
 - **Arm H — Fresh + High** reached `Completed` in 587.758 s with 1,005,320 reported mission tokens, including 640,000 cached input tokens.
 - H moved the programmatic five-hour meter from 0% to 1% used and the visible UI from 100% to 99% remaining.
-- H's external acceptance result is unresolved rather than a product failure: Windows PowerShell 5.1 converted the intentionally invalid-ID stderr into a terminating `NativeCommandError` before the harness could inspect the expected non-zero exit code.
+- H's original external acceptance capture aborted because Windows PowerShell 5.1 converted the intentionally invalid-ID stderr into a terminating `NativeCommandError`; after fixing the harness, the preserved H artifact passed the complete external acceptance suite with no additional model inference.
 - The plan-only mission reported 18,409 tokens. F reported zero because it stopped before `turn/start`.
 
 Immediate remediation is now the priority before another quota-intensive pair:
 
 1. explicitly configure the fork child as HIGH during `thread/fork` rather than relying on implicit inheritance;
 2. keep the returned-model and returned-effort guards;
-3. fix expected native-stderr capture in the PowerShell 5.1 acceptance harness;
-4. run the no-turn old-style-vs-pinned fork model identity probe to test the historical Astra/Luna hypothesis without model inference;
-5. rerun external acceptance against the existing H artifact with no model inference;
-6. run a narrow F-only smoke/measurement before another complete F/H benchmark.
+3. run the no-turn old-style-vs-pinned fork model identity probe to test the historical Astra/Luna hypothesis without model inference;
+4. run a narrow F-only smoke/measurement before another complete F/H benchmark.
 
 Do not interpret F's 0% allowance delta as evidence of cheap fork execution: F executed zero model turns.
 
