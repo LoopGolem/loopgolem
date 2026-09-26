@@ -9,12 +9,13 @@ Last updated after C5 and the allowance-strategy implementation work on 2026-09-
 The current production architecture uses:
 
 - a persistent GPT-6 Luna High Supervisor for planning and deterministic-failure recovery;
-- bounded GPT-6 Luna Low workers for implementation work;
+- bounded GPT-6 Luna Workers with explicit Low/High reasoning policy;
 - deterministic host operations and verification;
 - a separate persistent GPT-6 Luna High Validator;
 - SQLite persistence for missions, tasks, attempts, agent sessions, turns and telemetry;
-- explicit Codex CLI transport modes: FreshEphemeral, NewPersistent and Resume;
-- optional bounded Worker affinity reuse.
+- explicit CLI transport modes: FreshEphemeral, NewPersistent and Resume;
+- explicit Worker context strategies: Fresh, Affinity and experimental SupervisorFork;
+- a narrow experimental app-server fork transport for Supervisor-derived Workers.
 
 The current scheduler is serial even though mission tasks already contain dependency information.
 
@@ -32,7 +33,7 @@ Release criteria:
 6. known experimental limitations are explicit rather than hidden behind optimization claims;
 7. the repository is tagged and released as v0.1.0.
 
-Do not block v0.1.0 on app-server migration, parallel scheduling, a new common schema, or fork-lineage production support. Those changes are meaningful enough to deserve isolated implementation and benchmarking after the baseline release.
+Do not block v0.1.0 on a full app-server migration, parallel scheduling, or productionizing fork lineage. The shared Planner/Worker schema and narrow experimental SupervisorFork path now exist specifically for controlled measurement; broader transport changes still deserve isolated implementation and benchmarking.
 
 ## P0 — C5: isolate schema vs role text — completed
 
@@ -71,9 +72,9 @@ Before optimizing further for cached-token economics, compare two complete execu
 
 This is a product-strategy benchmark rather than a single-variable causal experiment. Its primary metric is useful completed work per visible five-hour allowance point. Raw input/cached/cache-write/output/reasoning telemetry remains mandatory but secondary.
 
-Implementation support now includes explicit Worker context/reasoning policy, shared Planner/Worker structured output, an experimental app-server SupervisorFork transport, plan-only missions, and missions created from a frozen PlannerResult.
+Implementation support now includes explicit Worker context/reasoning policy, shared Planner/Worker structured output, an experimental app-server SupervisorFork transport, plan-only missions, missions created from a frozen PlannerResult, and `SupervisorSourceMissionId` binding from Arm F to the exact paused plan-only mission that generated that frozen result.
 
-Do not select the product default until the implementation builds/self-tests successfully and the controlled benchmark in `docs/benchmark-v3-allowance-strategy.md` has been run.
+Release build with warnings-as-errors and Worker self-test are green on both Ubuntu and Windows for this pre-benchmark implementation. Do not select the product default until the controlled benchmark in `docs/benchmark-v3-allowance-strategy.md` has been run.
 
 Regardless of the winner, preserve both execution policies because token-equivalent economics and included-plan allowance economics may favor different shapes.
 
@@ -111,7 +112,7 @@ Supervisor HIGH
 
 C4 additionally showed that the HIGH -> LOW transition can preserve a warm prompt cache when the request shape remains compatible.
 
-Build an app-server adapter behind the existing provider/transport boundary rather than rewriting mission semantics.
+A narrow one-turn app-server SupervisorFork transport now exists behind the provider/transport boundary. The remaining P2 work is to evolve this into a production-grade managed adapter without rewriting mission semantics.
 
 Required transport properties:
 
@@ -125,7 +126,9 @@ Required transport properties:
 8. per-turn reasoning-effort changes;
 9. structured token-usage capture;
 10. cancellation, restart and process-loss recovery;
-11. codex exec fallback until the app-server path passes deterministic tests and controlled benchmarks.
+11. codex exec fallback while app-server remains experimental.
+
+The current experimental fork transport intentionally does not claim all of these production properties yet. It has passed deterministic build/self-test coverage for fork source selection and effort invariants, but still awaits the controlled allowance-strategy benchmark.
 
 Never implement the production adapter using select() over a buffered TextIOWrapper; Probe 3B demonstrated why that reader design can hide already-buffered completion events.
 
