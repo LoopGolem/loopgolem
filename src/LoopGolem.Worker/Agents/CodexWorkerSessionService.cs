@@ -319,10 +319,52 @@ public sealed class CodexWorkerSessionService(
                 "SupervisorFork source mission must match the measured mission goal and workspace.");
         }
 
+        var measured =
+            await store.GetAsync(
+                mission.Id,
+                cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Measured mission '{mission.Id}' was not found.");
+
+        var sourcePlannerResult =
+            GetCompletedPlannerResult(source);
+        var measuredPlannerResult =
+            GetCompletedPlannerResult(measured);
+
+        if (string.IsNullOrWhiteSpace(
+                sourcePlannerResult) ||
+            !string.Equals(
+                sourcePlannerResult,
+                measuredPlannerResult,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "SupervisorFork source mission must have the exact same frozen PlannerResult as the measured mission.");
+        }
+
         return await ResolveActiveSupervisorThreadAsync(
             sourceMissionId,
             cancellationToken);
     }
+
+    private static string?
+        GetCompletedPlannerResult(
+            MissionSnapshot snapshot) =>
+        snapshot.Tasks
+            .Where(task =>
+                task.Kind ==
+                    MissionTaskKind.PlanMission &&
+                task.Status ==
+                    DomainTaskStatus.Completed)
+            .OrderByDescending(
+                task =>
+                    task.UpdatedAtUtc)
+            .Select(task =>
+                task.ResultDetails)
+            .FirstOrDefault(
+                details =>
+                    !string.IsNullOrWhiteSpace(
+                        details));
 
     private async Task<string?>
         ResolveActiveSupervisorThreadAsync(
