@@ -2,7 +2,7 @@
 
 This roadmap records the current engineering priorities for LoopGolem. It is intentionally evidence-driven: experimental findings should change priorities before large implementation work begins.
 
-Last updated after the cache-positive C4 experiment on 2026-09-26.
+Last updated after the controlled C5 schema-vs-role-text experiment on 2026-09-26.
 
 ## Current baseline
 
@@ -34,54 +34,37 @@ Release criteria:
 
 Do not block v0.1.0 on app-server migration, parallel scheduling, a new common schema, or fork-lineage production support. Those changes are meaningful enough to deserve isolated implementation and benchmarking after the baseline release.
 
-## P0 — C5: isolate schema vs role text
+## P0 — C5: isolate schema vs role text — completed
 
-C4 established a strong controlled result:
+C5 closed the ambiguity left by C4.
 
-- HIGH / Planner warm control: 25,088 / 25,289 cached input, 99.21%;
-- HIGH -> LOW / Planner with the same request shape: exactly the same 25,088 / 25,289 cached input;
-- LOW / Worker with the current Worker request shape: 0 cached input;
-- final HIGH / Planner control: again 25,088 / 25,289 cached input.
+Controlled result:
 
-Therefore dynamic HIGH -> LOW reasoning-effort changes can preserve the warmed prefix, while the current Planner and Worker request shapes are not cache-compatible.
+- Control A, PlannerSchema + neutral text: 25,088 / 25,324 cached input, 99.07%;
+- Schema-only, WorkerSchema + the exact same neutral text: 0 / 25,152 cached input;
+- Text-only, PlannerSchema + Worker-style text: 25,088 / 25,349 cached input, 98.97%;
+- Control B, PlannerSchema + original neutral text: 25,216 / 25,324 cached input, 99.57%.
 
-C4 changed two variables in the Worker arm: structured-output schema and role-specific follow-up text. C5 must isolate them.
-
-### C5 experimental matrix
-
-All comparison children fork from the same parent checkpoint and use GPT-6 Luna Low after the fork.
-
-Use one role-neutral user message that is valid with either schema:
-
-~~~text
-Do not call tools or inspect files.
-Use only the inherited synthetic context.
-Return the minimal valid object permitted by the supplied structured-output schema.
-Keep collection fields empty when valid.
-~~~
-
-| Arm | Schema | User text | Purpose |
-| --- | --- | --- | --- |
-| Control A | PlannerSchema | neutral text | prove cache-positive baseline |
-| Schema-only | WorkerSchema | same neutral text | isolate output-schema effect |
-| Text-only | PlannerSchema | alternate role-specific text | isolate user-text effect |
-| Control B | PlannerSchema | original neutral text | prove cache remained available |
-
-Warm only until Control A reports Cached > 0, with a bounded maximum number of attempts. Abort the comparison if no cache-positive control is obtained.
+All comparison children forked from the same immutable HIGH parent checkpoint and changed to GPT-6 Luna Low only through `turn/start effort=low`.
 
 Interpretation:
 
-- if Schema-only loses cache while Text-only preserves it, prioritize a common/stable structured-output envelope;
-- if Text-only loses cache while Schema-only preserves it, prioritize role-neutral/shared prompt prefixes;
-- if both lose cache, both request components need redesign or the rendered ordering needs deeper inspection;
-- if both preserve cache, investigate another request-shape difference before changing production contracts;
-- if Control B loses cache, do not make a causal claim.
+- changing PlannerSchema -> WorkerSchema alone destroyed the warmed prefix observed by the control;
+- changing the role-specific user text alone preserved the same 25,088-token cached prefix;
+- the final control remained strongly cache-positive, so cache availability did not disappear during the comparison window;
+- the 128-token increase in Control B cached input is not a control loss and does not invalidate the preregistered C5 interpretation rule.
 
-C5 should be run in a fresh conversation/session so the result and subsequent implementation work are not endangered by an exhausted chat context.
+Therefore the current structured-output schema divergence is the primary cache-breaking component identified by C4/C5. Role-specific user text may still affect cache behavior in other shapes, but it was not the breaker in this controlled comparison.
+
+The C5 script contained an extra exact-equality guard for Control A vs Control B and mechanically printed `inconclusive` because Control B cached 128 additional tokens. That guard was stricter than the roadmap's pre-run criterion, which invalidated the experiment only if Control B lost the cache hit. The documented interpretation follows the preregistered experiment design.
+
+See `docs/context-fork-cache-investigation.md` for the complete result and limitations.
 
 ## P1 — Stable agent-turn envelope
 
-Only after C5 identifies the cache-breaking component, redesign the request contract.
+C5 identifies the current PlannerSchema/WorkerSchema divergence as the primary cache-breaking component. The next design step is therefore to prototype a stable/common structured-output envelope while keeping role semantics distinct.
+
+Do not jump directly to production migration. First define the smallest viable common envelope and measure both its rendered-token overhead and its cache behavior against the current separate schemas.
 
 Preferred direction:
 
