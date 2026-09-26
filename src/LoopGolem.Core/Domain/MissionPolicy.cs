@@ -29,21 +29,21 @@ public sealed record MissionPolicy(
     public int MaxWorkerSessionIdleMinutes { get; init; } = 30;
     public int MaxActiveWorkerSessions { get; init; } = 4;
 
-    public WorkerContextStrategy WorkerContextStrategy { get; init; } =
+    public WorkerContextStrategy WorkerContext { get; init; } =
         WorkerContextStrategy.Legacy;
 
-    public WorkerReasoningEffort WorkerReasoningEffort { get; init; } =
+    public WorkerReasoningEffort WorkerReasoning { get; init; } =
         WorkerReasoningEffort.Low;
 
     public WorkerContextStrategy EffectiveWorkerContextStrategy =>
-        WorkerContextStrategy == WorkerContextStrategy.Legacy
+        WorkerContext == WorkerContextStrategy.Legacy
             ? SessionReuse == SessionReuseMode.Affinity
                 ? WorkerContextStrategy.Affinity
                 : WorkerContextStrategy.Fresh
-            : WorkerContextStrategy;
+            : WorkerContext;
 
     public string EffectiveWorkerReasoningEffort =>
-        WorkerReasoningEffort == WorkerReasoningEffort.High
+        WorkerReasoning == WorkerReasoningEffort.High
             ? "high"
             : "low";
 
