@@ -149,6 +149,12 @@ public sealed class CodexSupervisorForkTransport(
                         cwd = appWorkspace,
                         approvalPolicy = "never",
                         sandbox = "workspace-write",
+                        config =
+                            new Dictionary<string, object?>
+                            {
+                                ["model_reasoning_effort"] = "high",
+                                ["sandbox_workspace_write.network_access"] = false
+                            },
                         ephemeral = true,
                         excludeTurns = true
                     },
