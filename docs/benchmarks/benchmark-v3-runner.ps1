@@ -9,7 +9,8 @@ param(
     [string]$AcceptanceScript,
     [Parameter(Mandatory = $true)]
     [string]$Distro,
-    [string]$ArtifactsRoot = ""
+    [string]$ArtifactsRoot = "",
+    [switch]$ArmFOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -694,6 +695,30 @@ finally {
 Reset-TargetWorkspace
 
 $ArmF = Invoke-MeasuredArm -Arm "F" -WorkerContext $WorkerContextSupervisorFork -WorkerReasoning $WorkerReasoningLow -SupervisorSourceMissionId $SourceMissionId
+
+if ($ArmFOnly) {
+    $final = [ordered]@{
+        loopGolemCommit = $LoopGolemCommit
+        targetBaseCommit = $TargetBase
+        goalSha256 = $goalSha256
+        frozenPlannerResultSha256 = $PlannerSha256
+        sourcePlanOnlyMissionId = $SourceMissionId
+        armF = $ArmF
+        armH = $null
+        armFOnly = $true
+        bothFunctionallyEligible = $false
+    }
+
+    Write-JsonArtifact -Path (Join-Path $ArtifactsRoot "benchmark-v3-summary.json") -Value $final
+
+    Write-Host ""
+    Write-Host "Arm F-only diagnostic capture complete." -ForegroundColor Green
+    Write-Host "Frozen PlannerResult SHA-256: $PlannerSha256"
+    Write-Host "F: $($ArmF.missionStatusName), acceptance=$($ArmF.externalAcceptance.passed), 5h $($ArmF.fiveHourAllowance.before.usedPercent)% -> $($ArmF.fiveHourAllowance.after30Seconds.usedPercent)%"
+    Write-Host "No strategy winner was evaluated because Arm H was intentionally skipped." -ForegroundColor Cyan
+    Write-Host "Artifacts: $ArtifactsRoot"
+    return
+}
 
 Reset-TargetWorkspace
 
