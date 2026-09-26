@@ -94,7 +94,8 @@ var server =
         store,
         orchestrator,
         codex,
-        telemetry);
+        telemetry,
+        appServerWorkerTransport);
 
 try
 {
