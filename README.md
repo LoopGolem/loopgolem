@@ -24,9 +24,9 @@ English, Portuguese (Brazil), Spanish, German, Italian, French, Hebrew, Arabic, 
 
 ## Current autonomous flow
 
-Codex missions use a persistent GPT-6 Luna High Supervisor for planning/recovery, bounded GPT-6 Luna Low workers with optional context affinity, deterministic host verification, and a separate persistent GPT-6 Luna High Validator for an independent final review. Recovery, session/turn telemetry and mission state are persisted in SQLite.
+Codex missions use a persistent GPT-6 Luna High Supervisor for planning/recovery, bounded GPT-6 Luna Workers with explicit context strategy (Fresh, Affinity or experimental SupervisorFork) and Low/High reasoning policy, deterministic host verification, and a separate persistent GPT-6 Luna High Validator for independent final review. Recovery, session/turn telemetry and mission state are persisted in SQLite.
 
-The controlled TaskForge benchmark procedure is documented in [docs/benchmark-v2.md](docs/benchmark-v2.md).
+The current controlled allowance-strategy benchmark is documented in [docs/benchmark-v3-allowance-strategy.md](docs/benchmark-v3-allowance-strategy.md). The earlier TaskForge v2 benchmark remains documented in [docs/benchmark-v2.md](docs/benchmark-v2.md) as historical evidence.
 
 The current evidence-driven engineering roadmap is documented in [docs/roadmap.md](docs/roadmap.md).
 
