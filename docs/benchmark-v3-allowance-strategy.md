@@ -43,12 +43,13 @@ Do not let each arm generate its own plan.
 
 1. Prepare the benchmark workspace at the recorded base commit.
 2. Run one plan-only mission with `StopAfterPlanning=true`.
-3. Persist the exact `PlannerResult` JSON from that mission as the benchmark artifact.
+3. Persist the exact `PlannerResult` JSON from that mission as the benchmark artifact, record its SHA-256, and keep the paused plan-only mission id.
 4. Restore the workspace to the exact same base commit before each measured arm.
-5. Create both measured missions with that same frozen PlannerResult.
-6. Do not run the Planner again inside either measured arm.
+5. Create Arm F from that frozen PlannerResult with `WorkerContextStrategy.SupervisorFork`, `WorkerReasoningEffort.Low`, and `SupervisorSourceMissionId` pointing to the paused plan-only mission.
+6. Create Arm H from the same frozen PlannerResult with `WorkerContextStrategy.Fresh` and `WorkerReasoningEffort.High`; it has no Supervisor source.
+7. Do not run the Planner again inside either measured arm.
 
-The frozen plan is part of the benchmark input and must be preserved byte-for-byte once captured.
+The frozen plan is part of the benchmark input and must be preserved byte-for-byte once captured. Arm F may fork only from a paused plan-only mission whose persisted PlannerResult is byte-for-byte identical to the measured mission's frozen PlannerResult. The source Supervisor is read as a fork parent; the measured mission does not resume or mutate the plan-only mission.
 
 ## Shared invariants
 
@@ -161,7 +162,10 @@ The policy model exposes:
 - `WorkerContextStrategy.SupervisorFork`
 - `WorkerReasoningEffort.Low`
 - `WorkerReasoningEffort.High`
+- optional `SupervisorSourceMissionId` for frozen SupervisorFork missions
 
 Persisted missions created before these fields existed continue to derive their context behavior from the legacy `SessionReuseMode`.
 
-The SupervisorFork path is experimental until it passes build/self-test validation and this controlled benchmark.
+For a frozen SupervisorFork mission, the Worker service validates that the source mission is paused, was created with `StopAfterPlanning=true`, matches the goal/workspace, has an active HIGH Supervisor thread, and carries the exact same persisted PlannerResult as the measured mission. This preserves the real planning context without a second Planner call or a synthetic Supervisor transplant.
+
+The SupervisorFork path is experimental until it passes this controlled benchmark.
