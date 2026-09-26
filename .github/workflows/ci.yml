@@ -32,3 +32,17 @@ jobs:
 
       - name: Worker self-test
         run: dotnet run --project src/LoopGolem.Worker/LoopGolem.Worker.csproj --configuration Release --no-build -- --self-test
+
+      - name: Parse benchmark v3 runner
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'docs/benchmarks/benchmark-v3-runner.ps1'),
+            [ref]$tokens,
+            [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
