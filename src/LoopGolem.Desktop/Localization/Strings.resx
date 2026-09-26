@@ -87,4 +87,10 @@
   <data name="Affinity" xml:space="preserve"><value>Affinity</value></data>
   <data name="FreshPerTask" xml:space="preserve"><value>Fresh per task</value></data>
   <data name="Elapsed" xml:space="preserve"><value>Elapsed</value></data>
+  <data name="ForkSupervisorContext" xml:space="preserve"><value>Inherit Supervisor context</value></data>
+  <data name="HighWorkerReasoning" xml:space="preserve"><value>High reasoning workers</value></data>
+  <data name="WorkerReasoning" xml:space="preserve"><value>Worker reasoning</value></data>
+  <data name="SupervisorFork" xml:space="preserve"><value>Supervisor fork</value></data>
+  <data name="High" xml:space="preserve"><value>High</value></data>
+  <data name="Low" xml:space="preserve"><value>Low</value></data>
 </root>
