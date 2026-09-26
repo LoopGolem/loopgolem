@@ -538,9 +538,14 @@ if ([string]::IsNullOrWhiteSpace($Goal)) {
 }
 
 $goalBytes = [Text.Encoding]::UTF8.GetBytes($Goal)
-$goalSha256 = [Convert]::ToHexString(
-    [Security.Cryptography.SHA256]::HashData($goalBytes)
-).ToLowerInvariant()
+$goalHasher = [Security.Cryptography.SHA256]::Create()
+try {
+    $goalHashBytes = $goalHasher.ComputeHash($goalBytes)
+}
+finally {
+    $goalHasher.Dispose()
+}
+$goalSha256 = ([BitConverter]::ToString($goalHashBytes)).Replace("-", "").ToLowerInvariant()
 
 $loopDirty = (& git -C $LoopGolemRoot status --porcelain)
 Assert-LastExitCode "LoopGolem git status"
