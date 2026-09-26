@@ -1,24 +1,47 @@
 #!/usr/bin/env python3
-"""Probe Codex app-server thread/fork model inheritance without starting a model turn.
+"""Compare old-style and pinned Codex thread/fork model identity without a model turn.
 
-This script intentionally performs only initialize, thread/start, and thread/fork
-JSON-RPC operations. It never calls turn/start, so it should not request model
-inference or consume turn tokens.
+The probe reuses the persistent HIGH Supervisor produced by an existing
+LoopGolem benchmark plan-only mission. That Supervisor already has a persisted
+Codex rollout, which thread/fork requires.
 
-The comparison reproduces the old LoopGolem fork shape (no explicit model on
-thread/fork) against the pinned shape (model='gpt-6-luna') from the same fresh
-Luna HIGH parent.
+The probe itself performs only app-server initialize + thread/fork requests.
+It never calls thread/start or turn/start, so it does not intentionally request
+new model inference.
+
+Usage from WSL:
+
+    python3 docs/benchmarks/probe-fork-model-no-turn.py \
+        --artifacts-root /mnt/c/Projetos/Github/loopgolem-benchmark-v3-YYYYMMDD-HHMMSS
+
+The benchmark artifact root must contain:
+- benchmark-v3-summary.json
+- state/loopgolem.db
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 MODEL = "gpt-6-luna"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--artifacts-root",
+        required=True,
+        help="Benchmark v3 artifact root containing benchmark-v3-summary.json and state/loopgolem.db.",
+    )
+    return parser.parse_args()
 
 
 def send(stream, payload: dict[str, Any]) -> None:
@@ -56,6 +79,9 @@ def request(
             )
 
         message = json.loads(line)
+
+        # Notifications and responses for unrelated ids can be ignored. This
+        # probe sends requests serially, so only the requested id is relevant.
         if message.get("id") != request_id:
             continue
 
@@ -86,7 +112,7 @@ def notify(
     send(proc.stdin, payload)
 
 
-def describe(result: dict[str, Any]) -> dict[str, Any]:
+def describe_fork(result: dict[str, Any]) -> dict[str, Any]:
     thread = result.get("thread")
     thread_id = thread.get("id") if isinstance(thread, dict) else None
     return {
@@ -98,7 +124,102 @@ def describe(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def to_wsl_path(path: str) -> str:
+    # Mission.WorkspacePath is persisted by the Windows Worker, so benchmark
+    # databases normally contain a Windows path. Convert it when this probe is
+    # executed under WSL.
+    if re.match(r"^[A-Za-z]:[\\/]", path):
+        completed = subprocess.run(
+            ["wslpath", "-a", "-u", path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return completed.stdout.strip()
+
+    return os.path.abspath(path)
+
+
+def load_parent(artifacts_root: Path) -> dict[str, str]:
+    summary_path = artifacts_root / "benchmark-v3-summary.json"
+    database_path = artifacts_root / "state" / "loopgolem.db"
+
+    if not summary_path.is_file():
+        raise RuntimeError(f"Missing benchmark summary: {summary_path}")
+    if not database_path.is_file():
+        raise RuntimeError(f"Missing benchmark database: {database_path}")
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8-sig"))
+    mission_id = summary.get("sourcePlanOnlyMissionId")
+    if not isinstance(mission_id, str) or not mission_id.strip():
+        raise RuntimeError(
+            "benchmark-v3-summary.json has no sourcePlanOnlyMissionId."
+        )
+
+    connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+    try:
+        row = connection.execute(
+            """
+            SELECT
+                s.provider_thread_id,
+                s.model,
+                s.reasoning_effort,
+                m.workspace_path
+            FROM agent_sessions AS s
+            INNER JOIN missions AS m
+                ON m.id = s.mission_id
+            WHERE
+                s.mission_id = ?
+                AND s.role = 'Supervisor'
+                AND s.provider_thread_id IS NOT NULL
+                AND length(trim(s.provider_thread_id)) > 0
+            ORDER BY
+                s.last_used_utc DESC,
+                s.updated_utc DESC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    if row is None:
+        raise RuntimeError(
+            f"No persisted Supervisor provider thread found for source mission {mission_id}."
+        )
+
+    provider_thread_id, model, reasoning_effort, workspace_path = row
+
+    if model != MODEL:
+        raise RuntimeError(
+            f"Persisted parent model is {model!r}, expected {MODEL!r}; refusing the probe."
+        )
+
+    if str(reasoning_effort).lower() != "high":
+        raise RuntimeError(
+            f"Persisted parent effort is {reasoning_effort!r}, expected 'high'; refusing the probe."
+        )
+
+    return {
+        "missionId": mission_id,
+        "threadId": str(provider_thread_id),
+        "model": str(model),
+        "reasoningEffort": str(reasoning_effort),
+        "workspace": str(workspace_path),
+    }
+
+
 def main() -> int:
+    args = parse_args()
+    artifacts_root = Path(args.artifacts_root).expanduser().resolve()
+    parent = load_parent(artifacts_root)
+    app_workspace = to_wsl_path(parent["workspace"])
+
+    if not os.path.isdir(app_workspace):
+        raise RuntimeError(
+            f"Persisted benchmark workspace does not exist in WSL: {app_workspace}"
+        )
+
     command = [
         "codex",
         "--enable",
@@ -144,49 +265,27 @@ def main() -> int:
         )
         notify(proc, "initialized")
 
-        cwd = os.getcwd()
-        parent = request(
-            proc,
-            2,
-            "thread/start",
-            {
-                "model": MODEL,
-                "cwd": cwd,
-                "approvalPolicy": "never",
-                "sandbox": "workspace-write",
-                "config": {
-                    "model_reasoning_effort": "high",
-                    "sandbox_workspace_write.network_access": False,
-                },
-                "ephemeral": True,
-            },
-        )
-
-        parent_thread = parent.get("thread")
-        if not isinstance(parent_thread, dict) or not parent_thread.get("id"):
-            raise RuntimeError("thread/start returned no parent thread id")
-
-        parent_id = str(parent_thread["id"])
-
         common_fork = {
-            "threadId": parent_id,
-            "cwd": cwd,
+            "threadId": parent["threadId"],
+            "cwd": app_workspace,
             "approvalPolicy": "never",
             "sandbox": "workspace-write",
             "ephemeral": True,
             "excludeTurns": True,
         }
 
+        # Reproduce the old LoopGolem shape: no model override on thread/fork.
         old_style = request(
             proc,
-            3,
+            2,
             "thread/fork",
             dict(common_fork),
         )
 
+        # Change one field only: explicitly pin the child model to Luna.
         pinned = request(
             proc,
-            4,
+            3,
             "thread/fork",
             {
                 **common_fork,
@@ -194,32 +293,30 @@ def main() -> int:
             },
         )
 
+        old_description = describe_fork(old_style)
+        pinned_description = describe_fork(pinned)
+
         summary = {
             "modelTurnStarted": False,
-            "parent": describe(parent),
-            "oldStyleForkWithoutModel": describe(old_style),
-            "pinnedForkWithModel": describe(pinned),
+            "parentSource": "persisted benchmark Supervisor rollout",
+            "parent": {
+                "missionId": parent["missionId"],
+                "threadId": parent["threadId"],
+                "model": parent["model"],
+                "reasoningEffort": parent["reasoningEffort"],
+                "cwd": app_workspace,
+            },
+            "oldStyleForkWithoutModel": old_description,
+            "pinnedForkWithModel": pinned_description,
+            "oldStyleChangedModel": old_description["model"] != parent["model"],
+            "pinnedMatchesRequestedModel": pinned_description["model"] == MODEL,
         }
-
-        parent_model = summary["parent"]["model"]
-        old_model = summary["oldStyleForkWithoutModel"]["model"]
-        pinned_model = summary["pinnedForkWithModel"]["model"]
-
-        summary["oldStyleChangedModel"] = old_model != parent_model
-        summary["pinnedMatchesRequestedModel"] = pinned_model == MODEL
 
         print(json.dumps(summary, indent=2, ensure_ascii=False))
 
-        if parent_model != MODEL:
+        if pinned_description["model"] != MODEL:
             print(
-                f"ERROR: parent thread is {parent_model!r}, expected {MODEL!r}.",
-                file=sys.stderr,
-            )
-            return 2
-
-        if pinned_model != MODEL:
-            print(
-                f"ERROR: pinned fork is {pinned_model!r}, expected {MODEL!r}.",
+                f"ERROR: pinned fork is {pinned_description['model']!r}, expected {MODEL!r}.",
                 file=sys.stderr,
             )
             return 3
