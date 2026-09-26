@@ -254,31 +254,13 @@ The trace therefore absolved both the model and app-server from the apparent fiv
 
 The cleanup `thread/archive` also appeared to time out for the same reader reason; the trace subsequently showed the parent becoming `notLoaded`.
 
-## Current conclusions before Probe 3C
+## Probe 3C — corrected app-server reader, complete run
 
-Established:
+Probe 3C kept the same experimental topology as 3B but replaced the custom `select()` + buffered-text reader with a single dedicated stdout reader thread using blocking `readline()`, then routed JSON-RPC responses and turn notifications through queues.
 
-1. app-server can express HIGH parent -> HIGH fork -> LOW turn.
-2. the original HIGH parent can conceptually remain a separate lineage for Supervisor/recovery use.
-3. per-turn effort mutation is a real primitive in the tested Codex 0.156.1 protocol.
-4. one app-server HIGH fork control inherited conversation context but reported zero last-turn cached input.
-5. cache observations vary materially across runs, so paired controls remain necessary.
-6. the first two app-server probe timeouts were probe-client bugs, not evidence of slow model inference.
+The complete run succeeded.
 
-Not established:
-
-1. whether dynamic HIGH -> LOW `turn/start` preserves the inherited cached prefix;
-2. whether LOW / Planner differs from HIGH / Planner after a proper dynamic effort change;
-3. the incremental cache effect of PlannerSchema -> WorkerSchema;
-4. whether a common role-agnostic output schema would materially improve cache reuse;
-5. whether app-server migration is an efficiency win in end-to-end LoopGolem missions;
-6. whether ChatGPT subscription-credit accounting follows any API-equivalent weighted-token heuristic.
-
-## Probe 3C — next experiment
-
-Do not change the experimental topology. Fix only the client transport.
-
-Use one app-server process and four turns:
+Shape:
 
 ```text
 Parent HIGH / Planner
@@ -293,55 +275,115 @@ Parent HIGH / Planner
                 isolate schema change
 ```
 
-Critical client change:
+Results:
 
-Do not use `select()` on a buffered text wrapper.
+| Run | Input | Cached | Cache write | Ordinary | Cache hit | Weighted input | Output | Reasoning | Duration ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| parent HIGH / Planner | 20,252 | 0 | 0 | 20,252 | 0.00% | 20,252.00 | 127 | 76 | 4,576 |
+| fork HIGH / Planner | 25,256 | 0 | 0 | 25,256 | 0.00% | 25,256.00 | 36 | 0 | 3,948 |
+| fork LOW / Planner | 25,256 | 0 | 0 | 25,256 | 0.00% | 25,256.00 | 36 | 0 | 4,239 |
+| fork LOW / Worker | 25,098 | 0 | 0 | 25,098 | 0.00% | 25,098.00 | 48 | 0 | 5,555 |
 
-Mirror the official SDK architecture instead:
+Structural observations:
+
+- the parent started at `reasoningEffort='high'`;
+- each child fork was created without an effort override and reported inherited `reasoningEffort='high'`;
+- the LOW Planner and LOW Worker children changed to LOW only through `turn/start effort='low'`;
+- after those turns, `thread/read` reported `reasoningEffort='low'`;
+- every turn completed normally;
+- the single-reader/message-router transport eliminated the false five-minute hangs seen in 3A/3B.
+
+### What 3C proves
+
+Probe 3C validates the app-server lifecycle and client architecture required to represent:
 
 ```text
-app-server stdout
-        |
-dedicated reader thread
-        |
-blocking readline()
-        |
-JSON decode
-        |
-Queue / router
-        |
-request and turn consumers
+HIGH parent
+    -> fork child while still HIGH
+    -> lower the child to LOW on turn/start
+    -> keep the original parent lineage independent
 ```
 
-One reader must own stdout for the lifetime of the process. Consumers must never compete to read the pipe directly.
+The corrected single-reader transport also validates the implementation pattern needed for any production app-server adapter: one stdout owner, request-id routing, turn-id routing and terminal `turn/completed` handling.
 
-For every turn, persist and print immediately:
+### What 3C does not prove
 
-- input
-- cached input
-- cache-write input
-- output
-- reasoning output
-- current thread reasoning effort
-- turn status
-- model-reported duration
-- event ordering
+All four requests reported `cachedInputTokens=0`.
 
-Keep raw measurements primary.
+Therefore Probe 3C cannot measure:
 
-Interpretation:
+- whether dynamic HIGH -> LOW effort changes preserve or destroy an existing cached prefix;
+- whether PlannerSchema -> WorkerSchema changes reduce an existing cache hit;
+- whether a common role-agnostic output schema would improve cache reuse.
 
-- compare HIGH / Planner to LOW / Planner for the effort-transition effect;
-- compare LOW / Planner to LOW / Worker for the schema effect;
-- if the HIGH control itself has unstable cache relative to nearby probes, avoid causal claims from a single sample.
+The exact equality of input tokens for HIGH / Planner and LOW / Planner (25,256 each) confirms that the two arms were closely matched at the visible-input level, but zero cache in both arms prevents any cache-preservation conclusion.
+
+The WorkerSchema arm used 25,098 input tokens, 158 fewer than the PlannerSchema arms. That difference describes rendered/request input size for this probe; it is not evidence of a cache advantage because neither arm had a cache hit.
+
+### Important cache-variability observation
+
+Cache availability varied materially across otherwise related probes:
+
+- Probe 1 parent: 12,032 cached; HIGH fork: 31,232 cached.
+- Probe 2 parent and all children: 12,032 cached.
+- Probe 3B parent: 12,032 cached; HIGH fork: 0 cached.
+- Probe 3C parent and all children: 0 cached.
+
+This is strong evidence that a single uncached app-server run cannot answer the effort/schema cache question.
+
+Current OpenAI prompt-caching documentation explicitly notes that maintaining a session does not guarantee a cache hit. Cache reuse requires an eligible matching rendered prefix to be available on the machine handling the request.
+
+## Current conclusions after Probe 3C
+
+Established:
+
+1. app-server can express HIGH parent -> HIGH fork -> LOW turn.
+2. the original HIGH parent can remain an independent lineage for Supervisor/recovery use.
+3. per-turn effort mutation works in the tested Codex 0.156.1 protocol/runtime.
+4. conversation lineage and prompt-cache reuse are distinct: a child can inherit conversation context while a request reports zero cached input.
+5. a production app-server client should use one dedicated stdout reader with message routing; the `select()` + buffered `TextIOWrapper` pattern used in 3B is invalid.
+6. app-server is now a concrete architecture candidate because it exposes lineage and per-turn controls that the current LoopGolem `codex exec` abstraction cannot represent.
+7. app-server has not yet been shown to reduce model cost or cached-input usage in an end-to-end LoopGolem mission.
+
+Not established:
+
+1. whether dynamic HIGH -> LOW `turn/start` preserves an already-warm cached prefix;
+2. the incremental cache effect of PlannerSchema -> WorkerSchema when a cache hit actually exists;
+3. whether a common role-agnostic output schema materially improves cache reuse;
+4. whether app-server migration is an efficiency win rather than primarily a lifecycle/control improvement;
+5. whether ChatGPT subscription-credit accounting follows any API-equivalent weighted-token heuristic.
+
+## Next cache experiment
+
+Do not repeat Probe 3C unchanged. A new experiment must first establish a warm-cache precondition and only then compare effort/schema arms.
+
+Required experimental discipline:
+
+1. create or repeat a deterministic request until a control request demonstrably reports non-zero cached input;
+2. immediately fork all comparison arms from the same parent/checkpoint;
+3. include a same-effort/same-schema cache-positive control;
+4. compare HIGH / Planner vs LOW / Planner only if the control remains cache-positive;
+5. compare LOW / Planner vs LOW / Worker only if the LOW / Planner arm also has a cache-positive reusable prefix;
+6. abort the causal interpretation if the control reports zero cached input.
+
+The objective of the next probe is therefore not “run the four arms again”; it is “obtain a cache-positive control, then isolate effort and schema changes before that cache state disappears.”
 
 ## Production architecture implication
 
-A migration from one-shot `codex exec` orchestration to Codex app-server is now a serious roadmap candidate because the desired fork/lineage and per-turn effort controls are exposed there.
+Migration from one-shot `codex exec` orchestration to Codex app-server should now appear on the LoopGolem roadmap as a serious post-v0.1 architecture item.
 
-This checkpoint does not yet justify implementing that migration before Probe 3C.
+The reason is lifecycle capability, not yet proven cache savings:
 
-If/when LoopGolem adopts app-server, do not implement transport with ad-hoc competing reads from stdin/stdout. The production client should follow a single-reader/message-router design similar to the official SDK:
+- explicit thread fork lineage;
+- per-turn reasoning-effort changes;
+- long-lived session control;
+- richer turn lifecycle;
+- direct token-usage notifications;
+- an architecture compatible with future parent/child worker branches.
+
+Do not justify the migration with a claim that app-server is cheaper. The current probes do not support that claim.
+
+If/when LoopGolem adopts app-server, the production adapter should follow a single-reader/message-router design similar to the official SDK:
 
 - one long-lived app-server process;
 - one dedicated stdout reader;
@@ -364,13 +406,3 @@ The controlled TaskForge A1/B1 benchmark remains documented separately in:
 Those results showed that Fresh vs Affinity was not causally resolved: both missions reached `NeedsHumanAttention`, planning/failure modes diverged, and derived non-cached input was nearly equal even though B1 had much more cached raw input.
 
 Do not mix the TaskForge Affinity result with this fork/cache probe as if they were one experiment.
-
-## Update rule
-
-After Probe 3C, update this document in place with:
-
-- the complete four-row result table;
-- whether the HIGH -> LOW transition preserved cached input;
-- whether PlannerSchema -> WorkerSchema changed cached input;
-- whether app-server migration moves into the near-term roadmap;
-- any revised experimental controls required before production implementation.
