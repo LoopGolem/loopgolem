@@ -23,6 +23,15 @@ public partial class MainWindow : Window
     private bool _codexChecked;
     private bool _refreshingWorkerStatus;
 
+    private sealed record WorkerStrategyOption(
+        string Label,
+        SessionReuseMode SessionReuse,
+        WorkerContextStrategy Context,
+        WorkerReasoningEffort Reasoning)
+    {
+        public override string ToString() => Label;
+    }
+
     public MainWindow()
     {
         InitializeComponent();
@@ -62,8 +71,37 @@ public partial class MainWindow : Window
         WorkerLabel.Text = $"{LocalizationService.Get("Worker")}:";
         CodexLabel.Text = $"{LocalizationService.Get("Codex")}:";
         CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
-        ReuseLowContextCheckBox.Content =
-            LocalizationService.Get("ReuseLowContext");
+
+        var selectedStrategy =
+            WorkerStrategyComboBox.SelectedIndex;
+        WorkerStrategyComboBox.ItemsSource =
+        [
+            new WorkerStrategyOption(
+                LocalizationService.Get("WorkerStrategyAffinityLow"),
+                SessionReuseMode.Affinity,
+                WorkerContextStrategy.Affinity,
+                WorkerReasoningEffort.Low),
+            new WorkerStrategyOption(
+                LocalizationService.Get("WorkerStrategyFreshHigh"),
+                SessionReuseMode.Disabled,
+                WorkerContextStrategy.Fresh,
+                WorkerReasoningEffort.High),
+            new WorkerStrategyOption(
+                LocalizationService.Get("WorkerStrategyForkLow"),
+                SessionReuseMode.Disabled,
+                WorkerContextStrategy.SupervisorFork,
+                WorkerReasoningEffort.Low),
+            new WorkerStrategyOption(
+                LocalizationService.Get("WorkerStrategyFreshLow"),
+                SessionReuseMode.Disabled,
+                WorkerContextStrategy.Fresh,
+                WorkerReasoningEffort.Low)
+        ];
+        WorkerStrategyComboBox.SelectedIndex =
+            selectedStrategy >= 0
+                ? Math.Min(selectedStrategy, 3)
+                : 0;
+
         WorkspaceLabel.Text = LocalizationService.Get("Workspace");
         BrowseButton.Content = LocalizationService.Get("Browse");
         MissionGoalLabel.Text = LocalizationService.Get("MissionGoal");
@@ -108,7 +146,7 @@ public partial class MainWindow : Window
             {
                 _codexChecked = false;
                 _codexReady = false;
-                ReuseLowContextCheckBox.IsEnabled = false;
+                WorkerStrategyComboBox.IsEnabled = false;
                 CodexStatusText.Text =
                     LocalizationService.Get("CodexNotChecked");
             }
@@ -187,7 +225,7 @@ public partial class MainWindow : Window
             CodexStatusText,
             status?.Message ?? LocalizationService.Get("CodexUnavailable"));
 
-        ReuseLowContextCheckBox.IsEnabled = _codexReady;
+        WorkerStrategyComboBox.IsEnabled = _codexReady;
     }
 
     private async void BrowseButton_Click(
@@ -253,20 +291,29 @@ public partial class MainWindow : Window
         WorkerResponse response;
         try
         {
+            var workerStrategy =
+                WorkerStrategyComboBox.SelectedItem
+                    as WorkerStrategyOption
+                ?? throw new InvalidOperationException(
+                    "A Worker strategy must be selected.");
+
             response = await _workerClient.CreateMissionAsync(
                 goal,
                 _workspacePath,
                 MissionExecutionMode.Codex,
-                ReuseLowContextCheckBox.IsChecked == true
-                    ? SessionReuseMode.Affinity
-                    : SessionReuseMode.Disabled);
+                sessionReuse:
+                    workerStrategy.SessionReuse,
+                workerContext:
+                    workerStrategy.Context,
+                workerReasoning:
+                    workerStrategy.Reasoning);
         }
         catch
         {
             _workerConnected = false;
             _codexChecked = false;
             _codexReady = false;
-            ReuseLowContextCheckBox.IsEnabled = false;
+            WorkerStrategyComboBox.IsEnabled = false;
             WorkerStatusText.Text = LocalizationService.Get("Disconnected");
             CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
             MissionStatusValue.Text = LocalizationService.Get("NotStarted");
@@ -286,7 +333,7 @@ public partial class MainWindow : Window
         RenderTasks(response.Mission.Tasks);
         RenderTelemetry(
             response.Telemetry,
-            response.Mission.Mission.Policy.SessionReuse);
+            response.Mission.Mission.Policy);
         _activeMissionId = response.Mission.Mission.Id;
 
         _missionPolling?.Cancel();
@@ -345,7 +392,7 @@ public partial class MainWindow : Window
             RenderTasks(response.Mission.Tasks);
             RenderTelemetry(
                 response.Telemetry,
-                mission.Policy.SessionReuse);
+                mission.Policy);
 
             if (!string.IsNullOrWhiteSpace(mission.Result))
             {
@@ -498,7 +545,7 @@ public partial class MainWindow : Window
 
     private void RenderTelemetry(
         MissionTelemetrySummary? telemetry,
-        SessionReuseMode sessionReuse)
+        MissionPolicy policy)
     {
         if (telemetry is null)
         {
@@ -506,14 +553,29 @@ public partial class MainWindow : Window
             return;
         }
 
+        var contextKey =
+            policy.EffectiveWorkerContextStrategy switch
+            {
+                WorkerContextStrategy.Affinity =>
+                    "Affinity",
+                WorkerContextStrategy.SupervisorFork =>
+                    "SupervisorFork",
+                _ =>
+                    "FreshPerTask"
+            };
+        var reasoningKey =
+            policy.WorkerReasoning ==
+                WorkerReasoningEffort.High
+                ? "HighReasoning"
+                : "LowReasoning";
+
         var lines = new List<string>
         {
             $"{LocalizationService.Get("WorkerContext")}: " +
-            LocalizationService.Get(
-                sessionReuse == SessionReuseMode.Affinity
-                    ? "Affinity"
-                    : "FreshPerTask") +
-            $" · {LocalizationService.Get("Elapsed")}: " +
+            $"{LocalizationService.Get(contextKey)} · " +
+            $"{LocalizationService.Get("WorkerReasoning")}: " +
+            $"{LocalizationService.Get(reasoningKey)} · " +
+            $"{LocalizationService.Get("Elapsed")}: " +
             FormatDuration(
                 telemetry.DurationMilliseconds),
 
