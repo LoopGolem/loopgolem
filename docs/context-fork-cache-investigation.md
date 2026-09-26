@@ -417,6 +417,71 @@ Q1 protocol:
 
 Q1 is not a pricing benchmark. Its purpose is to determine whether the five-hour meter updates synchronously enough to correlate a single isolated Luna Low turn with an account-level percentage delta. If the meter is unchanged, delayed or quantized, do not infer a per-turn cost from it.
 
+## Probe Q1 result — isolated Luna Low allowance meter
+
+Q1 completed successfully with no concurrent model work during the probe itself.
+
+### Stable no-inference baseline
+
+Three explicit `account/rateLimits/read` snapshots were taken before any model turn:
+
+| Snapshot | Local time | Primary 5h used | Secondary used |
+| --- | --- | ---: | ---: |
+| baseline t=0s | 00:48:54 | 18% | 39% |
+| baseline t=+5s | 00:49:00 | 18% | 39% |
+| baseline t=+15s | 00:49:10 | 18% | 39% |
+
+The baseline was stable, so Q1 proceeded with exactly one model turn.
+
+### Actual model identity
+
+The fresh thread response reported:
+
+```text
+model:           gpt-6-luna
+modelProvider:   openai
+serviceTier:     null
+reasoningEffort: low
+```
+
+### Single tiny turn
+
+The user instruction was only to reply `OK` and not call tools.
+
+Observed turn telemetry:
+
+```text
+inputTokens:            12,626
+cachedInputTokens:           0
+cacheWriteInputTokens:       0
+outputTokens:                5
+reasoningOutputTokens:       0
+durationMs:              2,231
+status:              completed
+```
+
+The 12,626 input tokens show that even a tiny user message carries a substantial fixed Codex-rendered prompt/context overhead in this environment.
+
+### Post-turn allowance reads
+
+| Snapshot | Local time | Primary 5h used | Secondary used |
+| --- | --- | ---: | ---: |
+| after t=0s | 00:49:13 | 18% | 39% |
+| after t=+10s | 00:49:24 | 18% | 39% |
+| after t=+30s | 00:49:44 | 18% | 39% |
+
+The single isolated Luna Low turn did not move either displayed integer percentage within 30 seconds.
+
+### Interpretation
+
+Q1 disproves the naive interpretation that each small Luna Low turn necessarily consumes one or more visible percentage points of the five-hour meter immediately. The 3C rolling notifications `10% -> 10% -> 13% -> 15%` therefore must not be mapped directly onto individual 3C turns.
+
+Q1 does not establish the exact hidden fractional cost of the tiny turn because the displayed percentage is integer-valued and backend accounting may be delayed or quantized. A turn can consume non-zero allowance without crossing the next displayed integer boundary.
+
+The first Q1 baseline was 18%, whereas the final rolling snapshot observed during 3C was 15%. Without a continuous isolated observation window between the experiments, the extra three percentage points cannot be causally assigned. If no other Work/Codex activity occurred in that interval, delayed/coalesced accounting from earlier probes becomes a plausible explanation, but it remains unproven.
+
+Practical consequence: do not use per-turn `account/rateLimits/updated` deltas as a cost metric. Continue to record raw token telemetry as the primary per-turn measurement and treat the five-hour percentage only as a coarse account-level operational constraint.
+
 ## Production architecture implication
 
 Migration from one-shot `codex exec` orchestration to Codex app-server should now appear on the LoopGolem roadmap as a serious post-v0.1 architecture item.
