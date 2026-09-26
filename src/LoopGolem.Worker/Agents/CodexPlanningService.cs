@@ -612,7 +612,7 @@ public sealed class CodexPlanningService(
             mission,
             task,
             WorkerModel,
-            WorkerReasoning,
+            GetWorkerReasoning(mission.Policy),
             WorkerSchema,
             BuildWorkerPrompt(
                 definition,
@@ -1044,6 +1044,13 @@ public sealed class CodexPlanningService(
         - Keep contextReuse.reason concise and technical.
         """;
     }
+
+    internal static string GetWorkerReasoning(
+        MissionPolicy policy) =>
+        policy.WorkerReasoning ==
+            WorkerReasoningEffort.High
+            ? PlannerReasoning
+            : WorkerReasoning;
 
     private async Task<TaskExecutionResult?> EnsureCleanGitAsync(
         string workspace,
