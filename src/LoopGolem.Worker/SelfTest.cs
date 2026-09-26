@@ -3595,6 +3595,87 @@ internal static class SelfTest
             return false;
         }
 
+        var sourceMissionId =
+            $"planner-source-{Guid.NewGuid():N}";
+        var sourceMission =
+            mission with
+            {
+                Id = sourceMissionId,
+                Status = MissionStatus.Paused,
+                Policy =
+                    MissionPolicy.Default with
+                    {
+                        StopAfterPlanning = true
+                    }
+            };
+        await store.CreateAsync(
+            new MissionSnapshot(
+                sourceMission,
+                []));
+        var sourceThreadId =
+            $"planner-thread-{Guid.NewGuid():N}";
+        await store.UpsertAgentSessionAsync(
+            new AgentSession(
+                $"planner-session-{Guid.NewGuid():N}",
+                sourceMissionId,
+                AgentSessionRole.Supervisor,
+                CodexPlanningService.PlannerModel,
+                CodexPlanningService.PlannerReasoning,
+                sourceThreadId,
+                AgentSessionStatus.Active,
+                null,
+                1,
+                0,
+                null,
+                now,
+                now,
+                now));
+
+        var forkTransport =
+            new FakeSupervisorForkTransport();
+        var forkService =
+            new CodexWorkerSessionService(
+                transport,
+                store,
+                forkTransport);
+        var forkMission =
+            mission with
+            {
+                Policy =
+                    policy with
+                    {
+                        WorkerContext =
+                            WorkerContextStrategy.SupervisorFork,
+                        WorkerReasoning =
+                            WorkerReasoningEffort.Low,
+                        SupervisorSourceMissionId =
+                            sourceMissionId
+                    }
+            };
+        var transportCountBeforeFork =
+            transport.Requests.Count;
+
+        await forkService.RunWorkAsync(
+            forkMission,
+            unrelated,
+            CodexPlanningService.WorkerModel,
+            CodexPlanningService.WorkerReasoning,
+            "{}",
+            "fork-from-planner-source");
+
+        if (forkTransport.Calls != 1 ||
+            forkTransport.ParentProviderThreadId !=
+                sourceThreadId ||
+            forkTransport.ReasoningEffort !=
+                CodexPlanningService.WorkerReasoning ||
+            transport.Requests.Count !=
+                transportCountBeforeFork)
+        {
+            Console.Error.WriteLine(
+                "Self-test SupervisorFork did not use the paused plan-only mission's persistent HIGH Supervisor.");
+            return false;
+        }
+
         return true;
     }
 
@@ -4173,6 +4254,52 @@ internal static class SelfTest
 
             throw new InvalidOperationException(
                 "Persisted recovery should not invoke the Supervisor again.");
+        }
+    }
+
+    private sealed class FakeSupervisorForkTransport :
+        ICodexSupervisorForkTransport
+    {
+        public int Calls { get; private set; }
+
+        public string? ParentProviderThreadId { get; private set; }
+
+        public string? ReasoningEffort { get; private set; }
+
+        public Task<CodexStructuredRunResult>
+            RunForkedWorkerAsync(
+                Mission mission,
+                MissionTask task,
+                string parentProviderThreadId,
+                string model,
+                string reasoningEffort,
+                string schema,
+                string prompt,
+                CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            ParentProviderThreadId =
+                parentProviderThreadId;
+            ReasoningEffort =
+                reasoningEffort;
+
+            return Task.FromResult(
+                new CodexStructuredRunResult(
+                    new ProcessRunResult(
+                        "codex app-server",
+                        [],
+                        0,
+                        false,
+                        1,
+                        string.Empty,
+                        string.Empty),
+                    "{}",
+                    "{}",
+                    null,
+                    $"fake-fork-session-{Guid.NewGuid():N}",
+                    $"fake-fork-thread-{Guid.NewGuid():N}",
+                    1,
+                    $"fake-fork-turn-{Guid.NewGuid():N}"));
         }
     }
 
