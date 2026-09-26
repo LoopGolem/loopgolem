@@ -18,23 +18,25 @@ The current Codex execution architecture follows the principle: expensive intell
 2. Before agent work, the Worker persists a capability snapshot that distinguishes the Codex agent environment from the deterministic host environment. The initial probe records `git` and `dotnet` availability/version in each environment and is reused after restart.
 3. GPT-6 Luna High opens one persistent read-only Supervisor session for the mission. Its first turn is planning: it can inspect the repository, receives the capability snapshot, and returns a structured dependency graph of small tasks. Later deterministic-recovery turns resume this same Supervisor when available.
 4. Exact mechanical work uses local deterministic operations such as `write_file`, `create_directory`, `rename_path` and direct `run_command` execution on the host.
-5. Tasks requiring implementation judgment run as bounded GPT-6 Luna Low workers in the agent environment. Each microtask receives its bounded prompt, explicit read files, explicit write allowlist, acceptance checks and the environment capability snapshot. When policy and deterministic affinity agree, several sequential microtasks may reuse one persistent Worker thread without merging their task semantics.
-6. LoopGolem verifies that a Luna Low worker did not change files outside its write allowlist.
+5. Tasks requiring implementation judgment run as bounded GPT-6 Luna Workers in the agent environment. `MissionPolicy` selects Worker reasoning (`Low` or `High`) and context strategy (`Fresh`, `Affinity` or experimental `SupervisorFork`). The compatibility/default path remains effectively Affinity + Low. Each microtask receives its bounded prompt, explicit read files, explicit write allowlist, acceptance checks and the environment capability snapshot.
+6. LoopGolem verifies that a Worker did not change files outside its write allowlist.
 7. After a task batch, LoopGolem runs deterministic Git inspection and the available local .NET build verification.
 8. LoopGolem creates an **unreachable Git snapshot commit** from the working tree using a temporary index. The user's branch, index and HEAD are not moved.
 9. GPT-6 Luna High opens a separate persistent read-only Validator session. It receives the original user goal, original plan, base commit, snapshot commit and the same persisted capability snapshot, and validates the actual diff. It never shares context with the Supervisor.
 10. If validation returns `ok`, the Validator session closes and the mission completes. If it returns `not_ok`, the validator may return a small correction task batch in the same deterministic/Luna Low format.
 11. Corrections are executed and the same Validator session reviews a new immutable snapshot on the next cycle. When `MissionPolicy.MaxValidationCycles` is reached without approval, the Validator closes and the mission stops in `NeedsHumanAttention`; LoopGolem never escalates above GPT-6 Luna High automatically.
 
-## Luna Low session affinity
+## Worker context and reasoning policy
 
-Worker-session reuse is a cost/context optimization layered underneath independent mission tasks. The Orchestrator still reasons about separate microtasks; the Worker adapter decides whether a persistent Luna Low thread is safe to resume.
+Worker execution remains task-scoped regardless of transport lineage. `WorkerContextStrategy.Fresh` starts a fresh ephemeral Worker for each microtask. `WorkerContextStrategy.Affinity` may resume a bounded persistent Worker thread when model hints and deterministic graph/path affinity agree. `WorkerContextStrategy.SupervisorFork` is the experimental app-server path that forks a child from a persistent HIGH Supervisor and then starts the child turn at the configured Worker reasoning effort.
 
-Each completed Worker turn stores a non-authoritative context-reuse hint. `CodexWorkerSessionService` combines that hint with deterministic task-graph and path evidence. Direct dependency and read-after-write relationships favor reuse, while intervening writes into the shared context footprint make a candidate ineligible.
+`WorkerReasoningEffort.Low` and `WorkerReasoningEffort.High` are explicit mission policy. For compatibility with persisted missions and older clients, a null explicit Worker context derives from legacy `SessionReuseMode`; the default still resolves to Affinity, while legacy `SessionReuseMode.Disabled` still resolves to Fresh.
 
-Persistent Worker sessions use leases. A session is leased to a task before external Codex execution and is unavailable to other tasks until that turn has been accepted and finalized. A stale lease after restart invalidates the session, as does an uncommitted last task, missing provider thread identity, task rejection or policy mismatch.
+Affinity is a cost/context optimization layered underneath independent mission tasks. Each completed Worker turn stores a non-authoritative `contextReuse` hint. `CodexWorkerSessionService` combines that hint with deterministic task-graph and path evidence. Direct dependency and read-after-write relationships favor reuse, while intervening writes into the shared context footprint make a candidate ineligible. Persistent affinity sessions use leases and are capped by accepted microtasks, idle time and active-session count.
 
-The default affinity policy caps a Worker thread at three accepted microtasks, thirty idle minutes and four active Worker sessions per mission. `SessionReuseMode.Disabled` remains a first-class control that forces fresh ephemeral Worker calls, allowing benchmark comparisons without changing model, reasoning effort or task granularity.
+SupervisorFork does not mutate the parent Supervisor. The experimental transport requires the fork response to report inherited HIGH reasoning before `turn/start`, applies the requested Worker effort on that turn, validates the final effort with `thread/read`, and closes the child after the turn. Planner and Worker use the same structured-output schema so the forked path does not reintroduce the schema divergence identified by C5.
+
+For frozen-plan benchmark missions, `SupervisorSourceMissionId` may point Arm F to the paused `StopAfterPlanning` mission that generated the frozen plan. The Worker validates that source mission, goal/workspace, active HIGH Supervisor and persisted PlannerResult before using its provider thread as the fork parent. Arm H has no Supervisor source and stays Fresh.
 
 ## Deterministic recovery
 
@@ -81,7 +83,7 @@ The mission Validator is a distinct persistent `AgentSessionRole.Validator`. The
 
 Worker `AgentSession` rows additionally persist lease owner, accepted microtask count and termination reason. Worker `AgentTurn` rows persist the model's reuse hint alongside normal token telemetry, which allows benchmark analysis to compare fresh and resumed work by session and turn.
 
-The Worker exposes a read-only mission telemetry summary over IPC. The Desktop shows wall time; input, cached-input, cache-write-input, output, reasoning-output and total tokens; session/turn counts; Worker reuse counts; recovery counts; and per-role totals. The mission's persisted Worker context mode is shown alongside the metrics. The controlled benchmark procedure is defined in `docs/benchmark-v2.md`.
+The Worker exposes a read-only mission telemetry summary over IPC. The Desktop shows wall time; input, cached-input, cache-write-input, output, reasoning-output and total tokens; session/turn counts; Worker reuse counts; recovery counts; and per-role totals. The mission's persisted Worker context and reasoning policy are available to the execution path. The current allowance-strategy benchmark is defined in `docs/benchmark-v3-allowance-strategy.md`; benchmark v2 remains historical evidence.
 
 Before a Luna Low task begins, LoopGolem persists a Git workspace baseline. If the Worker stops mid-task, the resumed attempt reuses that original baseline and enters `Retrying`, so edits made before the crash cannot disappear into a new baseline. Deterministic `write_file` and `create_directory` operations are naturally replayable. `rename_path` stores enough pre-execution state to recognize a rename that completed before persistence. An interrupted arbitrary `run_command` is not replayed automatically because its side effects may already have occurred; the mission stops in `NeedsHumanAttention`.
 
@@ -95,8 +97,8 @@ Codex calls remain worker-side adapters. Mission, task, quota, protocol and poli
 
 The current model policy is intentionally bounded:
 
-- GPT-6 Luna High: planning and final validation.
-- GPT-6 Luna Low: bounded implementation microtasks.
+- GPT-6 Luna High: planning, deterministic-failure recovery and final validation.
+- GPT-6 Luna Low or High: bounded implementation microtasks, selected explicitly by Worker mission policy; the compatibility/default path is Low.
 - Deterministic executor: exact work and local verification with zero model tokens.
 - Human attention: the escalation target when Luna High cannot close the mission safely.
 
