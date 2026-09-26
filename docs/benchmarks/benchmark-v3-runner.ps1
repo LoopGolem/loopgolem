@@ -530,11 +530,17 @@ if ($LoopGolemRoot -eq $Workspace) {
     throw "Workspace must be a disposable target repository, not the LoopGolem repository."
 }
 
-$Goal = [IO.File]::ReadAllText($GoalFile)
+# Normalize goal text before both execution and hashing so the benchmark input is
+# byte-stable across Windows (CRLF checkout) and Unix-like (LF checkout) hosts.
+$Goal = [IO.File]::ReadAllText($GoalFile).Replace("`r`n", "`n").Replace("`r", "`n")
 if ([string]::IsNullOrWhiteSpace($Goal)) {
     throw "Goal file is empty."
 }
-$goalSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $GoalFile).Hash.ToLowerInvariant()
+
+$goalBytes = [Text.Encoding]::UTF8.GetBytes($Goal)
+$goalSha256 = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData($goalBytes)
+).ToLowerInvariant()
 
 $loopDirty = (& git -C $LoopGolemRoot status --porcelain)
 Assert-LastExitCode "LoopGolem git status"
