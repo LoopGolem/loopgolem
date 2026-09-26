@@ -112,8 +112,21 @@ function Invoke-TaskForge {
         [string]$Operation = "TaskForge command"
     )
 
-    $output = (& dotnet $script:CliDll @Arguments 2>&1 | Out-String).Trim()
-    $exitCode = $LASTEXITCODE
+    # Windows PowerShell 5.1 surfaces native stderr as NativeCommandError
+    # records. Expected CLI failures (for example an invalid ID) must therefore
+    # be captured without letting the global Stop preference abort the harness
+    # before we can inspect the native exit code.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $captured = @(& dotnet $script:CliDll @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    $output = ($captured | Out-String).Trim()
 
     Assert-ExitCode -Operation $Operation -ExitCode $exitCode -ShouldSucceed $ShouldSucceed
     return $output
