@@ -64,6 +64,10 @@ public partial class MainWindow : Window
         CodexStatusText.Text = LocalizationService.Get("CodexNotChecked");
         ReuseLowContextCheckBox.Content =
             LocalizationService.Get("ReuseLowContext");
+        ForkSupervisorContextCheckBox.Content =
+            LocalizationService.Get("ForkSupervisorContext");
+        HighWorkerReasoningCheckBox.Content =
+            LocalizationService.Get("HighWorkerReasoning");
         WorkspaceLabel.Text = LocalizationService.Get("Workspace");
         BrowseButton.Content = LocalizationService.Get("Browse");
         MissionGoalLabel.Text = LocalizationService.Get("MissionGoal");
@@ -109,6 +113,8 @@ public partial class MainWindow : Window
                 _codexChecked = false;
                 _codexReady = false;
                 ReuseLowContextCheckBox.IsEnabled = false;
+                ForkSupervisorContextCheckBox.IsEnabled = false;
+                HighWorkerReasoningCheckBox.IsEnabled = false;
                 CodexStatusText.Text =
                     LocalizationService.Get("CodexNotChecked");
             }
@@ -188,6 +194,8 @@ public partial class MainWindow : Window
             status?.Message ?? LocalizationService.Get("CodexUnavailable"));
 
         ReuseLowContextCheckBox.IsEnabled = _codexReady;
+        ForkSupervisorContextCheckBox.IsEnabled = _codexReady;
+        HighWorkerReasoningCheckBox.IsEnabled = _codexReady;
     }
 
     private async void BrowseButton_Click(
@@ -253,13 +261,26 @@ public partial class MainWindow : Window
         WorkerResponse response;
         try
         {
+            var workerContext =
+                ForkSupervisorContextCheckBox.IsChecked == true
+                    ? WorkerContextStrategy.SupervisorFork
+                    : ReuseLowContextCheckBox.IsChecked == true
+                        ? WorkerContextStrategy.Affinity
+                        : WorkerContextStrategy.Fresh;
+            var workerReasoning =
+                HighWorkerReasoningCheckBox.IsChecked == true
+                    ? WorkerReasoningEffort.High
+                    : WorkerReasoningEffort.Low;
+
             response = await _workerClient.CreateMissionAsync(
                 goal,
                 _workspacePath,
                 MissionExecutionMode.Codex,
-                ReuseLowContextCheckBox.IsChecked == true
+                workerContext == WorkerContextStrategy.Affinity
                     ? SessionReuseMode.Affinity
-                    : SessionReuseMode.Disabled);
+                    : SessionReuseMode.Disabled,
+                workerContext,
+                workerReasoning);
         }
         catch
         {
@@ -286,7 +307,7 @@ public partial class MainWindow : Window
         RenderTasks(response.Mission.Tasks);
         RenderTelemetry(
             response.Telemetry,
-            response.Mission.Mission.Policy.SessionReuse);
+            response.Mission.Mission.Policy);
         _activeMissionId = response.Mission.Mission.Id;
 
         _missionPolling?.Cancel();
@@ -345,7 +366,7 @@ public partial class MainWindow : Window
             RenderTasks(response.Mission.Tasks);
             RenderTelemetry(
                 response.Telemetry,
-                mission.Policy.SessionReuse);
+                mission.Policy);
 
             if (!string.IsNullOrWhiteSpace(mission.Result))
             {
@@ -498,7 +519,7 @@ public partial class MainWindow : Window
 
     private void RenderTelemetry(
         MissionTelemetrySummary? telemetry,
-        SessionReuseMode sessionReuse)
+        MissionPolicy policy)
     {
         if (telemetry is null)
         {
@@ -510,9 +531,19 @@ public partial class MainWindow : Window
         {
             $"{LocalizationService.Get("WorkerContext")}: " +
             LocalizationService.Get(
-                sessionReuse == SessionReuseMode.Affinity
-                    ? "Affinity"
-                    : "FreshPerTask") +
+                policy.EffectiveWorkerContext switch
+                {
+                    WorkerContextStrategy.Affinity => "Affinity",
+                    WorkerContextStrategy.SupervisorFork =>
+                        "SupervisorFork",
+                    _ => "FreshPerTask"
+                }) +
+            $" · {LocalizationService.Get("WorkerReasoning")}: " +
+            LocalizationService.Get(
+                policy.WorkerReasoning ==
+                    WorkerReasoningEffort.High
+                    ? "High"
+                    : "Low") +
             $" · {LocalizationService.Get("Elapsed")}: " +
             FormatDuration(
                 telemetry.DurationMilliseconds),
