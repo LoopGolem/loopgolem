@@ -41,28 +41,28 @@ On Linux, LoopGolem invokes the native Codex CLI directly.
 
 LoopGolem does not inherit the user's Codex default model.
 
-The current autonomous policy is:
+The current autonomous model ceiling is GPT-6 Luna High:
 
 ```text
 planner:   gpt-6-luna / high
-worker:    gpt-6-luna / low
+worker:    gpt-6-luna / low or high (mission policy)
 validator: gpt-6-luna / high
 ```
 
-LoopGolem never automatically escalates above GPT-6 Luna High. Repeated validation failure becomes `NeedsHumanAttention`.
+The compatibility/default Worker path resolves to Low. Controlled experiments may select High explicitly. LoopGolem never automatically escalates above GPT-6 Luna High. Repeated validation failure becomes `NeedsHumanAttention`.
 
 ## Environment capabilities
 
 Before the first Codex task for a mission, LoopGolem captures and persists a mission-level capability snapshot for two distinct execution environments:
 
-- **agent environment**: where Planner/Luna Low/Validator commands execute. On Windows this is the selected WSL distribution; on Linux it is the native environment.
+- **agent environment**: where Planner/Worker/Validator Codex commands execute. On Windows this is the selected WSL distribution; on Linux it is the native environment.
 - **deterministic host environment**: where LoopGolem deterministic `run_command` and local verification executors run. On Windows this is Windows itself.
 
 The initial probe deliberately covers only `git` and `dotnet`, including version text when available. A listed tool marked unavailable is a known capability boundary. A tool that is not listed was not probed and has unknown availability.
 
 The snapshot is persisted once per mission and reused across Worker restarts instead of being silently refreshed. This keeps planning, execution and later benchmark telemetry tied to the same observed environment assumptions.
 
-Planner, Luna Low and Validator prompts receive the snapshot. The planner must not assign a known-unavailable agent tool to Luna Low or place a host-only command in a Luna Low acceptance check. If a required check is available on the deterministic host but unavailable in the agent environment, the planner should schedule deterministic host verification instead. Luna Low and Validator are explicitly told not to retry known-unavailable agent tools.
+Planner, Worker and Validator prompts receive the snapshot. The planner must not assign a known-unavailable agent tool to a Worker or place a host-only command in a Worker acceptance check. If a required check is available on the deterministic host but unavailable in the agent environment, the planner should schedule deterministic host verification instead. Worker and Validator prompts are explicitly told not to retry known-unavailable agent tools.
 
 ## Planner / Supervisor
 
@@ -73,21 +73,25 @@ Keeping this thread alive preserves planning context for later deterministic-fai
 The planner chooses between:
 
 - deterministic operations for exact mechanical work;
-- GPT-6 Luna Low for small tasks requiring implementation judgment.
+- a bounded GPT-6 Luna Worker for small tasks requiring implementation judgment; mission policy selects Low or High reasoning.
 
 A self-hosting rule warns the planner that the currently running LoopGolem Worker does not hot-reload changes made to its own runtime projects.
 
 ## Session transport
 
-LoopGolem has three explicit Codex CLI transport modes:
+The established CLI adapter has three explicit modes:
 
 - `FreshEphemeral`: starts a new `codex exec --ephemeral` thread.
 - `NewPersistent`: starts a new non-ephemeral Codex thread. When the JSONL stream emits `thread.started`, LoopGolem persists the provider thread id immediately instead of waiting for the Codex process to exit.
 - `Resume`: resumes a previously persisted provider thread with `codex exec ... resume <thread-id> -`. The logical LoopGolem session must still be active and its role, model and reasoning effort must match the requested turn.
 
-The transport reads JSONL stdout incrementally. Persistent thread identity is therefore crash-safe once `thread.started` has been observed. Completed turns persist duration and token dimensions in `agent_turns`.
+The CLI transport reads JSONL stdout incrementally. Persistent thread identity is therefore crash-safe once `thread.started` has been observed. Completed turns persist duration and token dimensions in `agent_turns`.
 
-Planner runs as the first turn of one persistent **Supervisor** session per mission. Deterministic-recovery planning resumes this same Supervisor through `Resume`, preserving the reasoning context that created the mission plan. Validation uses a separate persistent **Validator** session that is never shared with Supervisor or Worker roles. Luna Low workers have their own bounded affinity-reuse policy; all three session roles remain isolated.
+An experimental fourth execution path, `WorkerContextStrategy.SupervisorFork`, uses `codex app-server --listen stdio://` instead of `codex exec`. It calls `thread/fork` on a persisted Supervisor provider thread, requires the child to report inherited HIGH reasoning, starts the Worker turn with the configured effort through `turn/start`, validates that final effort through `thread/read`, records app-server token-usage notifications, and closes the child after the bounded turn. Apps, plugins, multi-agent mode and Codex memories are disabled for this app-server process.
+
+Planner and Worker calls use the same structured-output schema. This is intentional: C5 showed that changing the structured-output schema was the primary observed cache breaker, while changing role-specific text alone preserved the warmed prefix.
+
+Planner runs as the first turn of one persistent **Supervisor** session per ordinary mission. Deterministic-recovery planning resumes the mission-local Supervisor through `Resume`. Validation uses a separate persistent **Validator** session that is never shared with Supervisor or Worker roles. Worker context strategy is explicit: Fresh uses a one-turn ephemeral CLI session, Affinity uses bounded persistent CLI sessions, and SupervisorFork uses a one-turn app-server child while leaving the parent Supervisor independent.
 
 If a Supervisor resume fails with the Codex CLI's explicit `Session not found: <expected-thread-id>` error, LoopGolem invalidates that logical session with reason `provider_session_not_found`, reconstructs mission context from persisted mission/task/capability state, and starts a replacement persistent Supervisor. Other errors such as quota/auth/transient failures do not trigger a session reset. An active Supervisor with no persisted provider thread id, a model/reasoning mismatch, or a duplicate active Supervisor is also invalidated deterministically before selection.
 
@@ -99,15 +103,17 @@ The Supervisor may return only a small batch of Luna Low repair tasks (currently
 
 A failed recheck returns to the same Supervisor for the next recovery cycle, up to the mission's configured `MaxRecoveryCycles`. If the Supervisor thread itself has disappeared, the controlled session-reset path reconstructs context from persisted mission tasks, task attempts, recovery cycles, and capability evidence before planning continues.
 
-Luna Low repair calls use the same bounded Worker affinity policy as normal Luna Low microtasks. They remain separate mission tasks with their own baselines and verification.
+Repair Worker calls use the same Worker context/reasoning policy as normal implementation microtasks. They remain separate mission tasks with their own baselines and verification.
 
-## Luna Low workers
+## Worker execution policy
 
-Luna Low work remains task-scoped even when transport context is reused. Every microtask keeps its own persisted task status, execution attempt, Git baseline, token usage, write allowlist, acceptance checks and deterministic post-task verification.
+Worker work remains task-scoped even when transport context is reused. Every microtask keeps its own persisted task status, execution attempt, Git baseline, token usage, write allowlist, acceptance checks and deterministic post-task verification.
 
-For new missions, `SessionReuseMode.Affinity` is enabled by default. `SessionReuseMode.Disabled` preserves the earlier `FreshEphemeral` behavior for controlled A/B benchmarks.
+The explicit context choices are `Fresh`, `Affinity` and experimental `SupervisorFork`; the explicit reasoning choices are `Low` and `High`. For compatibility with persisted missions and older clients, a null explicit Worker context derives from legacy `SessionReuseMode`. The default therefore still resolves to Affinity, while legacy `SessionReuseMode.Disabled` resolves to Fresh.
 
-With affinity enabled, the first eligible Luna Low microtask starts a persistent Worker thread. After a successful turn, Luna Low returns a small `contextReuse` hint saying whether its current repository understanding is likely to help an immediate follow-up task. The hint is persisted on the `AgentTurn`, but it is not authoritative.
+With affinity enabled, the first eligible Worker microtask starts a persistent Worker thread. After a successful turn, the Worker returns a small `contextReuse` hint saying whether its current repository understanding is likely to help an immediate follow-up task. The hint is persisted on the `AgentTurn`, but it is not authoritative.
+
+For a frozen SupervisorFork mission, `SupervisorSourceMissionId` identifies the paused `StopAfterPlanning` mission whose HIGH Supervisor generated the frozen PlannerResult. Before forking, LoopGolem requires the source to exist, remain paused and plan-only, match the measured mission's goal/workspace, expose an active HIGH Supervisor provider thread, and carry a byte-for-byte identical persisted PlannerResult. The measured mission never reruns the Planner and does not resume or mutate the source mission.
 
 LoopGolem reuses a Worker session only when both the model hint and deterministic affinity rules agree. Direct task dependencies and read-after-write file relationships carry the strongest weight. Write/write overlap, shared reads and shared directories can strengthen affinity. Any completed intervening task that writes into the relevant context footprint cancels reuse for that candidate.
 
@@ -145,7 +151,7 @@ Correction batches use the same deterministic/Luna Low task format. LoopGolem us
 
 ## Permission model
 
-Luna Low runs with `workspace-write` sandboxing, network disabled and approval policy `never`. Planning and validation run read-only. Apps, plugins, multi-agent mode and Codex memories are explicitly disabled. Disabling memories keeps future session-reuse experiments focused on thread context rather than a second persistent-memory mechanism.
+Workers run with `workspace-write` sandboxing, network disabled and approval policy `never`. Planning and validation run read-only. Apps, plugins, multi-agent mode and Codex memories are explicitly disabled in both the CLI and experimental SupervisorFork paths. Disabling memories keeps context experiments focused on thread lineage rather than a second persistent-memory mechanism.
 
 ## Worktree safety
 
@@ -153,11 +159,11 @@ Codex missions require a clean Git working tree before planning begins. This avo
 
 A zero Codex exit code is never accepted as proof by itself. LoopGolem additionally checks structured responses, changed-file allowlists, Git diff validity, local builds when applicable, and final Luna High validation.
 
-Before each Luna Low call, LoopGolem persists a Git workspace baseline in mission state. If the Worker is interrupted, the next attempt reuses that same baseline rather than recapturing the partially modified workspace. This keeps write-allowlist verification meaningful across process restarts.
+Before each Worker call, LoopGolem persists a Git workspace baseline in mission state. If the Worker is interrupted, the next attempt reuses that same baseline rather than recapturing the partially modified workspace. This keeps write-allowlist verification meaningful across process restarts.
 
 ## Token usage telemetry
 
-LoopGolem invokes autonomous `codex exec` calls with JSON event output enabled and reads token usage from the completed-turn event. It persists input, cached-input, cache-write-input, output, reasoning-output and comparable total-token counts. Cached input is a subset of input and is not added a second time when computing totals. If the CLI does not provide `total_tokens`, LoopGolem computes the call total as input plus output.
+LoopGolem persists input, cached-input, cache-write-input, output, reasoning-output and comparable total-token counts. The CLI adapter reads usage from JSON completed-turn events; the experimental app-server fork adapter records the corresponding token-usage notifications. Cached input is a subset of input and is not added a second time when computing totals. If a transport does not provide a comparable total directly, LoopGolem computes the call total from the available input/output dimensions.
 
 Every Codex call also receives a logical session and turn record containing role/purpose, model, reasoning effort, turn number and duration. Recovery Supervisor turns use purpose `Recovery` and are linked from persisted recovery cycles. Worker turns additionally persist the model's context-reuse recommendation and reason. Calls using the explicit `FreshEphemeral` control mode close their logical session after the single turn; persistent modes keep the logical session active only while policy allows later resume.
 
@@ -165,4 +171,4 @@ Task-level token usage remains available for mission execution and Desktop rollu
 
 ## Future direction
 
-The CLI transport now has the primitives needed for resumable sessions without changing mission semantics. A future migration to Codex app-server or an official SDK remains possible if LoopGolem later needs richer lifecycle control or quota telemetry that the CLI cannot expose.
+The CLI adapter remains the stable path for fresh, affinity, Supervisor and Validator sessions. The app-server path is intentionally narrow and experimental today: SupervisorFork workers only. A future production adapter may make app-server long-lived and general-purpose, with centralized JSON-RPC routing, richer lineage/lifecycle management and quota telemetry, without changing provider-independent mission semantics.
