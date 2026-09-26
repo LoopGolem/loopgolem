@@ -3597,6 +3597,11 @@ internal static class SelfTest
 
         var sourceMissionId =
             $"planner-source-{Guid.NewGuid():N}";
+        var measuredMissionId =
+            $"fork-measured-{Guid.NewGuid():N}";
+        const string frozenPlannerResult =
+            "{\"baseCommit\":\"test-base\",\"plan\":{\"summary\":\"test\",\"tasks\":[]}}";
+
         var sourceMission =
             mission with
             {
@@ -3618,7 +3623,7 @@ internal static class SelfTest
                 null,
                 DomainTaskStatus.Completed,
                 "Frozen planner source.",
-                "{}",
+                frozenPlannerResult,
                 null,
                 now,
                 now);
@@ -3626,6 +3631,7 @@ internal static class SelfTest
             new MissionSnapshot(
                 sourceMission,
                 [sourcePlanTask]));
+
         var sourceThreadId =
             $"planner-thread-{Guid.NewGuid():N}";
         await store.UpsertAgentSessionAsync(
@@ -3645,16 +3651,11 @@ internal static class SelfTest
                 now,
                 now));
 
-        var forkTransport =
-            new FakeSupervisorForkTransport();
-        var forkService =
-            new CodexWorkerSessionService(
-                transport,
-                store,
-                forkTransport);
         var forkMission =
             mission with
             {
+                Id = measuredMissionId,
+                Status = MissionStatus.Running,
                 Policy =
                     policy with
                     {
@@ -3666,12 +3667,49 @@ internal static class SelfTest
                             sourceMissionId
                     }
             };
+        var measuredPlanTask =
+            new MissionTask(
+                $"fork-plan-task-{Guid.NewGuid():N}",
+                measuredMissionId,
+                1,
+                MissionTaskKind.PlanMission,
+                "Plan mission",
+                null,
+                DomainTaskStatus.Completed,
+                "Frozen planner input.",
+                frozenPlannerResult,
+                null,
+                now,
+                now);
+        var forkTask =
+            CreateAffinityTask(
+                measuredMissionId,
+                2,
+                "fork-worker",
+                [],
+                ["src/fork.cs"],
+                []);
+        await store.CreateAsync(
+            new MissionSnapshot(
+                forkMission,
+                [
+                    measuredPlanTask,
+                    forkTask
+                ]));
+
+        var forkTransport =
+            new FakeSupervisorForkTransport();
+        var forkService =
+            new CodexWorkerSessionService(
+                transport,
+                store,
+                forkTransport);
         var transportCountBeforeFork =
             transport.Requests.Count;
 
         await forkService.RunWorkAsync(
             forkMission,
-            unrelated,
+            forkTask,
             CodexPlanningService.WorkerModel,
             CodexPlanningService.WorkerReasoning,
             "{}",
@@ -3686,7 +3724,7 @@ internal static class SelfTest
                 transportCountBeforeFork)
         {
             Console.Error.WriteLine(
-                "Self-test SupervisorFork did not use the paused plan-only mission's persistent HIGH Supervisor.");
+                "Self-test SupervisorFork did not use the paused plan-only mission's persistent HIGH Supervisor for the exact frozen PlannerResult.");
             return false;
         }
 
