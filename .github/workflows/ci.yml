@@ -37,6 +37,7 @@ jobs:
         shell: pwsh
         run: |
           foreach ($script in @(
+            'docs/benchmarks/benchmark-v3-start.ps1',
             'docs/benchmarks/benchmark-v3-runner.ps1',
             'docs/benchmarks/taskforge-v3-acceptance.ps1'
           )) {
@@ -59,6 +60,7 @@ jobs:
         shell: powershell
         run: |
           foreach ($script in @(
+            'docs/benchmarks/benchmark-v3-start.ps1',
             'docs/benchmarks/benchmark-v3-runner.ps1',
             'docs/benchmarks/taskforge-v3-acceptance.ps1'
           )) {
