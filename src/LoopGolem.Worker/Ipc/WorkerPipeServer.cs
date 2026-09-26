@@ -180,14 +180,38 @@ public sealed class WorkerPipeServer(
                         "A valid workspace directory is required.");
                 }
 
-                var policy =
-                    request.SessionReuse is { } sessionReuse
-                        ? MissionPolicy.Default with
+                MissionPolicy? policy = null;
+
+                if (request.SessionReuse is { } sessionReuse ||
+                    request.WorkerContext is { } ||
+                    request.WorkerReasoning is { })
+                {
+                    policy = MissionPolicy.Default;
+
+                    if (request.SessionReuse is { } requestedReuse)
+                    {
+                        policy = policy with
                         {
-                            SessionReuse =
-                                sessionReuse
-                        }
-                        : null;
+                            SessionReuse = requestedReuse
+                        };
+                    }
+
+                    if (request.WorkerContext is { } requestedContext)
+                    {
+                        policy = policy with
+                        {
+                            WorkerContext = requestedContext
+                        };
+                    }
+
+                    if (request.WorkerReasoning is { } requestedReasoning)
+                    {
+                        policy = policy with
+                        {
+                            WorkerReasoning = requestedReasoning
+                        };
+                    }
+                }
 
                 var snapshot = await orchestrator.CreateMissionAsync(
                     request.Goal,
