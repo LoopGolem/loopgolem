@@ -59,7 +59,6 @@ public sealed record MissionPolicy(
             MaxValidationCycles: 3,
             SessionReuse: SessionReuseMode.Affinity)
         {
-            WorkerContext = WorkerContextStrategy.Affinity,
             WorkerReasoning = WorkerReasoningEffort.Low
         };
 }
