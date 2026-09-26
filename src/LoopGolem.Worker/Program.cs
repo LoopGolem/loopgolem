@@ -28,10 +28,16 @@ var supervisor =
     new CodexSupervisorSessionService(
         codexTransport,
         store);
+await using var appServerWorkerTransport =
+    new CodexAppServerWorkerTransport(
+        processRunner,
+        codex,
+        store);
 var workerSessions =
     new CodexWorkerSessionService(
         codexTransport,
-        store);
+        store,
+        appServerWorkerTransport);
 var validatorSessions =
     new CodexValidatorSessionService(
         codexTransport,
