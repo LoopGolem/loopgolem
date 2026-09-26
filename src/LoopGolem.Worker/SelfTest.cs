@@ -3608,10 +3608,24 @@ internal static class SelfTest
                         StopAfterPlanning = true
                     }
             };
+        var sourcePlanTask =
+            new MissionTask(
+                $"planner-source-task-{Guid.NewGuid():N}",
+                sourceMissionId,
+                1,
+                MissionTaskKind.PlanMission,
+                "Plan mission",
+                null,
+                DomainTaskStatus.Completed,
+                "Frozen planner source.",
+                "{}",
+                null,
+                now,
+                now);
         await store.CreateAsync(
             new MissionSnapshot(
                 sourceMission,
-                []));
+                [sourcePlanTask]));
         var sourceThreadId =
             $"planner-thread-{Guid.NewGuid():N}";
         await store.UpsertAgentSessionAsync(
