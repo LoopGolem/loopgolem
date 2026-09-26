@@ -547,6 +547,27 @@ public sealed partial class MissionOrchestrator : IMissionOrchestrator
                     }
 
                     snapshot = expansion.Snapshot!;
+
+                    if (snapshot.Mission.Policy.PauseAfterPlanning)
+                    {
+                        snapshot = snapshot with
+                        {
+                            Mission = snapshot.Mission with
+                            {
+                                Status = MissionStatus.Paused,
+                                Result =
+                                    "Planning completed; benchmark seed is ready.",
+                                Error = null,
+                                UpdatedAtUtc = finishedAt
+                            }
+                        };
+
+                        await _store.UpdateAsync(
+                            snapshot,
+                            cancellationToken);
+
+                        return snapshot;
+                    }
                 }
                 else if (
                     completed.Kind == MissionTaskKind.ValidateMission)

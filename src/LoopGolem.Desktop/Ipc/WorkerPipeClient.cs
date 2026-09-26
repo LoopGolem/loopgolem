@@ -24,11 +24,23 @@ public sealed class WorkerPipeClient
             TimeSpan.FromSeconds(60));
 
 
+    public Task<WorkerResponse> GetCodexAllowanceAsync(
+        CancellationToken cancellationToken = default) =>
+        SendAsync(
+            new WorkerRequest(
+                WorkerProtocol.GetCodexAllowance),
+            cancellationToken,
+            TimeSpan.FromSeconds(60));
+
     public Task<WorkerResponse> CreateMissionAsync(
         string goal,
         string workspacePath,
         MissionExecutionMode executionMode,
         SessionReuseMode? sessionReuse = null,
+        WorkerContextStrategy? workerContext = null,
+        WorkerReasoningEffort? workerReasoning = null,
+        bool pauseAfterPlanning = false,
+        string? frozenPlannerResultJson = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             new WorkerRequest(
@@ -36,7 +48,12 @@ public sealed class WorkerPipeClient
                 Goal: goal,
                 WorkspacePath: workspacePath,
                 ExecutionMode: executionMode,
-                SessionReuse: sessionReuse),
+                SessionReuse: sessionReuse,
+                WorkerContext: workerContext,
+                WorkerReasoning: workerReasoning,
+                PauseAfterPlanning: pauseAfterPlanning,
+                FrozenPlannerResultJson:
+                    frozenPlannerResultJson),
             cancellationToken);
 
     public Task<WorkerResponse> GetMissionAsync(

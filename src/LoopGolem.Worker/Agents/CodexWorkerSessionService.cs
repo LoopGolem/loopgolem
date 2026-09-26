@@ -1,3 +1,4 @@
+using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Orchestrator;
 using DomainTaskStatus = LoopGolem.Core.Domain.TaskStatus;
@@ -6,9 +7,13 @@ namespace LoopGolem.Worker.Agents;
 
 public sealed class CodexWorkerSessionService(
     ICodexSessionTransport transport,
-    IMissionStore store)
+    IMissionStore store,
+    ICodexWorkerAppServerTransport? appServerTransport = null)
 {
     private const int MinimumAffinityScore = 3;
+
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
 
     public async Task<CodexStructuredRunResult> RunWorkAsync(
         Mission mission,
@@ -19,8 +24,56 @@ public sealed class CodexWorkerSessionService(
         string prompt,
         CancellationToken cancellationToken = default)
     {
-        if (mission.Policy.SessionReuse ==
-            SessionReuseMode.Disabled)
+        if (mission.Policy.WorkerContext ==
+            WorkerContextStrategy.SupervisorFork)
+        {
+            var appServer =
+                appServerTransport
+                ?? throw new InvalidOperationException(
+                    "SupervisorFork requires the Codex app-server worker transport.");
+
+            var parentThreadId =
+                await ResolveSupervisorProviderThreadIdAsync(
+                    mission.Id,
+                    cancellationToken);
+
+            return await appServer.RunForkAsync(
+                CreateRequest(
+                    mission,
+                    task,
+                    model,
+                    reasoningEffort,
+                    schema,
+                    prompt,
+                    CodexSessionMode.FreshEphemeral,
+                    null),
+                parentThreadId,
+                cancellationToken);
+        }
+
+        if (mission.Policy.WorkerContext ==
+            WorkerContextStrategy.Fresh)
+        {
+            var appServer =
+                appServerTransport
+                ?? throw new InvalidOperationException(
+                    "Explicit Fresh worker strategy requires the Codex app-server worker transport.");
+
+            return await appServer.RunFreshAsync(
+                CreateRequest(
+                    mission,
+                    task,
+                    model,
+                    reasoningEffort,
+                    schema,
+                    prompt,
+                    CodexSessionMode.FreshEphemeral,
+                    null),
+                cancellationToken);
+        }
+
+        if (mission.Policy.EffectiveWorkerContextStrategy ==
+            WorkerContextStrategy.Fresh)
         {
             return await transport.RunStructuredAsync(
                 CreateRequest(
@@ -166,13 +219,16 @@ public sealed class CodexWorkerSessionService(
             terminationReason =
                 "worker_task_rejected";
         }
-        else if (mission.Policy.SessionReuse ==
-                 SessionReuseMode.Disabled)
+        else if (mission.Policy.EffectiveWorkerContextStrategy !=
+                 WorkerContextStrategy.Affinity)
         {
             status =
                 AgentSessionStatus.Closed;
             terminationReason ??=
-                "ephemeral";
+                mission.Policy.EffectiveWorkerContextStrategy ==
+                    WorkerContextStrategy.SupervisorFork
+                    ? "supervisor_fork_task_complete"
+                    : "fresh_worker_task_complete";
         }
         else if (string.IsNullOrWhiteSpace(
                      session.ProviderThreadId))
@@ -229,6 +285,74 @@ public sealed class CodexWorkerSessionService(
                 updated.Id,
                 CancellationToken.None);
         }
+    }
+
+    private async Task<string>
+        ResolveSupervisorProviderThreadIdAsync(
+            string missionId,
+            CancellationToken cancellationToken)
+    {
+        var sessions =
+            await store.ListAgentSessionsAsync(
+                missionId,
+                cancellationToken);
+
+        var supervisor =
+            sessions
+                .Where(session =>
+                    session.Role ==
+                        AgentSessionRole.Supervisor &&
+                    session.Status ==
+                        AgentSessionStatus.Active &&
+                    !string.IsNullOrWhiteSpace(
+                        session.ProviderThreadId))
+                .OrderByDescending(
+                    session =>
+                        session.LastUsedAtUtc)
+                .FirstOrDefault();
+
+        if (supervisor is not null)
+        {
+            return supervisor.ProviderThreadId!;
+        }
+
+        var snapshot =
+            await store.GetAsync(
+                missionId,
+                cancellationToken);
+        var plannerTask =
+            snapshot?.Tasks
+                .Where(task =>
+                    task.Kind ==
+                        MissionTaskKind.PlanMission &&
+                    !string.IsNullOrWhiteSpace(
+                        task.ResultDetails))
+                .OrderByDescending(
+                    task => task.Sequence)
+                .FirstOrDefault();
+
+        if (plannerTask?.ResultDetails is { } details)
+        {
+            try
+            {
+                var frozen =
+                    JsonSerializer.Deserialize<PlannerResult>(
+                        details,
+                        JsonOptions);
+
+                if (!string.IsNullOrWhiteSpace(
+                        frozen?.SupervisorProviderThreadId))
+                {
+                    return frozen.SupervisorProviderThreadId;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        throw new InvalidOperationException(
+            "SupervisorFork requires a persisted Supervisor thread from live planning or a frozen PlannerResult that contains SupervisorProviderThreadId.");
     }
 
     private async Task<AgentSession?>

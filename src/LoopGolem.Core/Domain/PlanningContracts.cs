@@ -48,7 +48,10 @@ public sealed record MissionPlan(
 
 public sealed record PlannerResult(
     string BaseCommit,
-    MissionPlan Plan);
+    MissionPlan Plan)
+{
+    public string? SupervisorProviderThreadId { get; init; }
+}
 
 public sealed record ValidatorContext(
     string BaseCommit,

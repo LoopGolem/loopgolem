@@ -7,6 +7,7 @@ public static class WorkerProtocol
     public const string PipeName = "loopgolem-worker-v1";
     public const string Ping = "ping";
     public const string GetCodexStatus = "getCodexStatus";
+    public const string GetCodexAllowance = "getCodexAllowance";
     public const string CreateMission = "createMission";
     public const string GetMission = "getMission";
 }
@@ -42,6 +43,18 @@ public sealed record CodexRuntimeStatus(
     string Runtime = "native",
     string? Distribution = null,
     string? Model = null);
+
+public sealed record CodexAllowanceSnapshot(
+    DateTimeOffset ObservedAtUtc,
+    double? PrimaryUsedPercent,
+    int? PrimaryWindowMinutes,
+    long? PrimaryResetsAtUnix,
+    double? SecondaryUsedPercent,
+    int? SecondaryWindowMinutes,
+    long? SecondaryResetsAtUnix,
+    bool? OrdinaryUsageAllowed,
+    string? LimitId,
+    string? LimitName);
 
 public sealed record AgentRoleTelemetrySummary(
     AgentSessionRole Role,
@@ -79,7 +92,11 @@ public sealed record WorkerRequest(
     string? Goal = null,
     string? WorkspacePath = null,
     MissionExecutionMode ExecutionMode = MissionExecutionMode.Codex,
-    SessionReuseMode? SessionReuse = null);
+    SessionReuseMode? SessionReuse = null,
+    WorkerContextStrategy? WorkerContext = null,
+    WorkerReasoningEffort? WorkerReasoning = null,
+    bool PauseAfterPlanning = false,
+    string? FrozenPlannerResultJson = null);
 
 public sealed record WorkerResponse(
     bool Success,
@@ -88,4 +105,5 @@ public sealed record WorkerResponse(
     string? WorkerStatus = null,
     MissionSnapshot? Mission = null,
     CodexRuntimeStatus? CodexStatus = null,
-    MissionTelemetrySummary? Telemetry = null);
+    MissionTelemetrySummary? Telemetry = null,
+    CodexAllowanceSnapshot? CodexAllowance = null);

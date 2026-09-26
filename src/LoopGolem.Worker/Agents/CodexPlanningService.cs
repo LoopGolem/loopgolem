@@ -71,7 +71,7 @@ public sealed class CodexPlanningService(
                 task,
                 PlannerModel,
                 PlannerReasoning,
-                PlannerSchema,
+                PlannerWorkerSchema,
                 BuildPlannerPrompt(
                     mission,
                     capabilities),
@@ -133,7 +133,11 @@ public sealed class CodexPlanningService(
         return TaskExecutionResult.Succeeded(
             plan.Summary,
             JsonSerializer.Serialize(
-                new PlannerResult(baseCommit, plan),
+                new PlannerResult(baseCommit, plan)
+                {
+                    SupervisorProviderThreadId =
+                        run.ProviderThreadId
+                },
                 JsonOptions),
             run.TokenUsage);
     }
@@ -564,7 +568,7 @@ public sealed class CodexPlanningService(
         {
             return TaskExecutionResult.Failed(
                 "Luna Low task definition is missing.",
-                "The planner did not provide a valid Luna Low microtask.");
+                "The planner did not provide a valid Luna Worker microtask.");
         }
 
         var status = await runtime.GetStatusAsync(cancellationToken);
@@ -583,7 +587,7 @@ public sealed class CodexPlanningService(
         if (string.IsNullOrWhiteSpace(task.ExecutionContext))
         {
             return TaskExecutionResult.Failed(
-                "Luna Low execution baseline is missing.",
+                "Luna Worker execution baseline is missing.",
                 "The task was not prepared for crash-safe execution.");
         }
 
@@ -597,26 +601,35 @@ public sealed class CodexPlanningService(
         catch (JsonException exception)
         {
             return TaskExecutionResult.Failed(
-                "Luna Low execution baseline is invalid.",
+                "Luna Worker execution baseline is invalid.",
                 exception.Message);
         }
 
         if (before is null)
         {
             return TaskExecutionResult.Failed(
-                "Luna Low execution baseline is empty.",
+                "Luna Worker execution baseline is empty.",
                 "The persisted workspace snapshot could not be restored.");
         }
+
+        var useCommonEnvelope =
+            mission.Policy.EffectiveWorkerContextStrategy ==
+                WorkerContextStrategy.SupervisorFork;
+        var workerSchema =
+            useCommonEnvelope
+                ? PlannerWorkerSchema
+                : WorkerSchema;
 
         var run = await workerSessions.RunWorkAsync(
             mission,
             task,
             WorkerModel,
-            WorkerReasoning,
-            WorkerSchema,
+            mission.Policy.EffectiveWorkerReasoningEffort,
+            workerSchema,
             BuildWorkerPrompt(
                 definition,
-                capabilities),
+                capabilities,
+                useCommonEnvelope),
             cancellationToken);
 
         DevelopmentDiagnostics.Write(
@@ -630,7 +643,7 @@ public sealed class CodexPlanningService(
                 mission,
                 run,
                 TaskExecutionResult.Failed(
-                    "Luna Low microtask timed out.",
+                    "Luna Worker microtask timed out.",
                     "The microtask exceeded the one-hour timeout.",
                     run.Details,
                     run.TokenUsage),
@@ -645,7 +658,7 @@ public sealed class CodexPlanningService(
                 mission,
                 run,
                 TaskExecutionResult.Failed(
-                    $"Luna Low exited with code {run.Process.ExitCode}.",
+                    $"Luna Worker exited with code {run.Process.ExitCode}.",
                     GetProcessError(run.Process),
                     run.Details,
                     run.TokenUsage),
@@ -667,7 +680,7 @@ public sealed class CodexPlanningService(
                 mission,
                 run,
                 TaskExecutionResult.Failed(
-                    "Luna Low returned invalid structured output.",
+                    "Luna Worker returned invalid structured output.",
                     exception.Message,
                     run.Details,
                     run.TokenUsage),
@@ -682,7 +695,7 @@ public sealed class CodexPlanningService(
                 mission,
                 run,
                 TaskExecutionResult.Failed(
-                    "Luna Low returned no structured output.",
+                    "Luna Worker returned no structured output.",
                     "The final response was empty.",
                     run.Details,
                     run.TokenUsage),
@@ -774,7 +787,7 @@ public sealed class CodexPlanningService(
                 run.Details,
                 run.TokenUsage),
             _ => TaskExecutionResult.Failed(
-                "Luna Low returned an unsupported outcome.",
+                "Luna Worker returned an unsupported outcome.",
                 outcome.Outcome,
                 run.Details,
                 run.TokenUsage)
@@ -831,6 +844,13 @@ public sealed class CodexPlanningService(
         {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
 
         Produce only the structured execution plan required by the schema.
+
+        COMMON ENVELOPE RULES:
+        - Set outcome to "plan".
+        - Set checks to an empty array.
+        - Set blocker to an empty string.
+        - Set contextReuse.recommended=false and contextReuse.reason to an empty string.
+        - tasks and finalChecks carry the actual planning result.
 
         RULES:
         - Prefer many small, independently verifiable microtasks over broad tasks.
@@ -1001,10 +1021,22 @@ public sealed class CodexPlanningService(
 
     internal static string BuildWorkerPrompt(
         PlannedTask task,
-        MissionCapabilitySnapshot capabilities)
+        MissionCapabilitySnapshot capabilities,
+        bool useCommonEnvelope = false)
     {
         static string Lines(IEnumerable<string> values) =>
             string.Join(Environment.NewLine, values.Select(value => $"- {value}"));
+
+        var commonEnvelopeRules =
+            useCommonEnvelope
+                ? """
+                  COMMON ENVELOPE RULES:
+                  - Set tasks to an empty array.
+                  - Set finalChecks to an empty array.
+                  - outcome, summary, checks, blocker and contextReuse carry the actual Worker result.
+
+                  """
+                : string.Empty;
 
         return $"""
         TASK {task.Id}: {task.Title}
@@ -1024,7 +1056,7 @@ public sealed class CodexPlanningService(
         EXECUTION CAPABILITIES:
         {EnvironmentCapabilityService.FormatForPrompt(capabilities)}
 
-        RULES:
+        {commonEnvelopeRules}RULES:
         - You execute only in the AGENT ENVIRONMENT.
         - Do not attempt a probed tool marked UNAVAILABLE in the agent environment, even if an acceptance check mentions it.
         - Host-only checks are performed separately by LoopGolem. Do not return blocked solely because a host-only check cannot run in your environment.
@@ -1292,11 +1324,15 @@ public sealed class CodexPlanningService(
         }
         """;
 
-    private const string PlannerSchema =
+    internal const string PlannerWorkerSchema =
         """
         {
           "type": "object",
           "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": ["plan", "changed", "already_satisfied", "blocked"]
+            },
             "summary": { "type": "string" },
             "tasks": {
               "type": "array",
@@ -1370,9 +1406,26 @@ public sealed class CodexPlanningService(
             "finalChecks": {
               "type": "array",
               "items": { "type": "string" }
+            },
+            "checks": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "blocker": { "type": "string" },
+            "contextReuse": {
+              "type": "object",
+              "properties": {
+                "recommended": { "type": "boolean" },
+                "reason": { "type": "string" }
+              },
+              "required": ["recommended", "reason"],
+              "additionalProperties": false
             }
           },
-          "required": ["summary", "tasks", "finalChecks"],
+          "required": [
+            "outcome", "summary", "tasks", "finalChecks",
+            "checks", "blocker", "contextReuse"
+          ],
           "additionalProperties": false
         }
         """;

@@ -12,9 +12,20 @@ public sealed class PlannerTaskExecutor(
     public Task<TaskExecutionResult> ExecuteAsync(
         Mission mission,
         MissionTask task,
-        CancellationToken cancellationToken = default) =>
-        planning.PlanAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(
+                mission.Policy.FrozenPlannerResultJson))
+        {
+            return Task.FromResult(
+                TaskExecutionResult.Succeeded(
+                    "Using frozen benchmark plan.",
+                    mission.Policy.FrozenPlannerResultJson));
+        }
+
+        return planning.PlanAsync(
             mission,
             task,
             cancellationToken);
+    }
 }

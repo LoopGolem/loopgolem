@@ -113,6 +113,11 @@ internal static class SelfTest
                 return 1;
             }
 
+            if (!VerifyPlannerWorkerEnvelopeSchema())
+            {
+                return 1;
+            }
+
             if (!await VerifyMissionTelemetrySummaryAsync(
                     root))
             {
@@ -165,6 +170,12 @@ internal static class SelfTest
             }
 
             if (!await VerifyWorkerSessionAffinityAsync(
+                    root))
+            {
+                return 1;
+            }
+
+            if (!await VerifyWorkerExecutionStrategiesAsync(
                     root))
             {
                 return 1;
@@ -784,6 +795,86 @@ internal static class SelfTest
         return false;
     }
 
+    private static bool VerifyPlannerWorkerEnvelopeSchema()
+    {
+        try
+        {
+            using var document =
+                JsonDocument.Parse(
+                    CodexPlanningService.PlannerWorkerSchema);
+            var root = document.RootElement;
+            var properties =
+                root.GetProperty("properties");
+            var required =
+                root.GetProperty("required")
+                    .EnumerateArray()
+                    .Select(value =>
+                        value.GetString())
+                    .ToHashSet(
+                        StringComparer.Ordinal);
+
+            string[] expectedRequired =
+            [
+                "outcome",
+                "summary",
+                "tasks",
+                "finalChecks",
+                "checks",
+                "blocker",
+                "contextReuse"
+            ];
+
+            if (expectedRequired.Any(
+                    name =>
+                        !required.Contains(name)) ||
+                !properties.TryGetProperty(
+                    "tasks",
+                    out _) ||
+                !properties.TryGetProperty(
+                    "contextReuse",
+                    out _))
+            {
+                Console.Error.WriteLine(
+                    "Self-test Planner/Worker common schema is incomplete.");
+                return false;
+            }
+
+            var outcomeValues =
+                properties.GetProperty("outcome")
+                    .GetProperty("enum")
+                    .EnumerateArray()
+                    .Select(value =>
+                        value.GetString())
+                    .ToHashSet(
+                        StringComparer.Ordinal);
+
+            if (!outcomeValues.SetEquals(
+                    [
+                        "plan",
+                        "changed",
+                        "already_satisfied",
+                        "blocked"
+                    ]))
+            {
+                Console.Error.WriteLine(
+                    "Self-test Planner/Worker common schema outcome contract changed.");
+                return false;
+            }
+        }
+        catch (Exception exception)
+            when (exception is
+                JsonException or
+                KeyNotFoundException or
+                InvalidOperationException)
+        {
+            Console.Error.WriteLine(
+                $"Self-test Planner/Worker common schema is invalid: {exception.Message}");
+            return false;
+        }
+
+        return true;
+    }
+
     private static async Task<bool>
         VerifyMissionTelemetrySummaryAsync(
             string root)
@@ -1098,6 +1189,10 @@ internal static class SelfTest
             {
                 SessionReuse =
                     SessionReuseMode.Disabled,
+                WorkerContext =
+                    WorkerContextStrategy.SupervisorFork,
+                WorkerReasoning =
+                    WorkerReasoningEffort.Low,
                 MaxWorkerSessionMicrotasks = 2
             };
 
@@ -1139,7 +1234,11 @@ internal static class SelfTest
                 ExecutionMode:
                     MissionExecutionMode.Codex,
                 SessionReuse:
-                    SessionReuseMode.Disabled);
+                    SessionReuseMode.Disabled,
+                WorkerContext:
+                    WorkerContextStrategy.SupervisorFork,
+                WorkerReasoning:
+                    WorkerReasoningEffort.Low);
         var serialized =
             JsonSerializer.Serialize(
                 request,
@@ -1150,10 +1249,14 @@ internal static class SelfTest
                 JsonOptions);
 
         if (roundTrip?.SessionReuse !=
-            SessionReuseMode.Disabled)
+                SessionReuseMode.Disabled ||
+            roundTrip.WorkerContext !=
+                WorkerContextStrategy.SupervisorFork ||
+            roundTrip.WorkerReasoning !=
+                WorkerReasoningEffort.Low)
         {
             Console.Error.WriteLine(
-                "Self-test Worker protocol did not preserve session reuse mode.");
+                "Self-test Worker protocol did not preserve worker execution policy.");
             return false;
         }
 
@@ -3598,6 +3701,193 @@ internal static class SelfTest
         return true;
     }
 
+    private static async Task<bool>
+        VerifyWorkerExecutionStrategiesAsync(
+            string root)
+    {
+        var database = Path.Combine(
+            root,
+            "state",
+            "worker-strategies.db");
+        var workspace = Path.Combine(
+            root,
+            "worker-strategies-workspace");
+        Directory.CreateDirectory(workspace);
+
+        var store =
+            new SqliteMissionStore(database);
+        await store.InitializeAsync();
+
+        var cliTransport =
+            new FakeWorkerAffinityTransport(
+                store);
+        var appServerTransport =
+            new FakeWorkerAppServerTransport(
+                store);
+        var service =
+            new CodexWorkerSessionService(
+                cliTransport,
+                store,
+                appServerTransport);
+
+        var now = DateTimeOffset.UtcNow;
+
+        var freshMissionId =
+            $"worker-fresh-high-{Guid.NewGuid():N}";
+        var freshMission =
+            new Mission(
+                freshMissionId,
+                "Verify fresh High worker routing.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now)
+            {
+                Policy =
+                    MissionPolicy.Default with
+                    {
+                        SessionReuse =
+                            SessionReuseMode.Disabled,
+                        WorkerContext =
+                            WorkerContextStrategy.Fresh,
+                        WorkerReasoning =
+                            WorkerReasoningEffort.High
+                    }
+            };
+        var freshTask =
+            CreateAffinityTask(
+                freshMissionId,
+                1,
+                "fresh-high",
+                [],
+                ["src/fresh.cs"],
+                []);
+
+        await store.CreateAsync(
+            new MissionSnapshot(
+                freshMission,
+                [freshTask]));
+
+        var freshRun =
+            await service.RunWorkAsync(
+                freshMission,
+                freshTask,
+                CodexPlanningService.WorkerModel,
+                freshMission.Policy
+                    .EffectiveWorkerReasoningEffort,
+                "{}",
+                "fresh high");
+
+        if (appServerTransport.FreshRequests.Count != 1 ||
+            appServerTransport.ForkRequests.Count != 0 ||
+            cliTransport.Requests.Count != 0 ||
+            appServerTransport.FreshRequests[0]
+                .ReasoningEffort != "high" ||
+            freshRun.ProviderThreadId is null)
+        {
+            Console.Error.WriteLine(
+                "Self-test Fresh + High did not route through a fresh app-server Worker.");
+            return false;
+        }
+
+        var forkMissionId =
+            $"worker-fork-low-{Guid.NewGuid():N}";
+        var forkMission =
+            new Mission(
+                forkMissionId,
+                "Verify Supervisor fork Low worker routing.",
+                workspace,
+                MissionExecutionMode.Codex,
+                MissionStatus.Running,
+                null,
+                null,
+                now,
+                now)
+            {
+                Policy =
+                    MissionPolicy.Default with
+                    {
+                        SessionReuse =
+                            SessionReuseMode.Disabled,
+                        WorkerContext =
+                            WorkerContextStrategy.SupervisorFork,
+                        WorkerReasoning =
+                            WorkerReasoningEffort.Low
+                    }
+            };
+        var forkTask =
+            CreateAffinityTask(
+                forkMissionId,
+                2,
+                "fork-low",
+                [],
+                ["src/fork.cs"],
+                []);
+
+        const string supervisorThread =
+            "self-test-supervisor-thread";
+        var frozenPlan =
+            new PlannerResult(
+                "self-test-base",
+                new MissionPlan(
+                    "Frozen test plan.",
+                    [],
+                    []))
+            {
+                SupervisorProviderThreadId =
+                    supervisorThread
+            };
+        var planTask =
+            new MissionTask(
+                Guid.NewGuid().ToString("N"),
+                forkMissionId,
+                1,
+                MissionTaskKind.PlanMission,
+                "Frozen planning seed",
+                null,
+                DomainTaskStatus.Completed,
+                "Frozen test plan.",
+                JsonSerializer.Serialize(
+                    frozenPlan,
+                    JsonOptions),
+                null,
+                now,
+                now);
+
+        await store.CreateAsync(
+            new MissionSnapshot(
+                forkMission,
+                [planTask, forkTask]));
+
+        var forkRun =
+            await service.RunWorkAsync(
+                forkMission,
+                forkTask,
+                CodexPlanningService.WorkerModel,
+                forkMission.Policy
+                    .EffectiveWorkerReasoningEffort,
+                "{}",
+                "fork low");
+
+        if (appServerTransport.ForkRequests.Count != 1 ||
+            appServerTransport.ForkRequests[0].ParentThreadId !=
+                supervisorThread ||
+            appServerTransport.ForkRequests[0].Request
+                .ReasoningEffort != "low" ||
+            cliTransport.Requests.Count != 0 ||
+            forkRun.ProviderThreadId is null)
+        {
+            Console.Error.WriteLine(
+                "Self-test SupervisorFork + Low did not fork the persisted Supervisor through app-server.");
+            return false;
+        }
+
+        return true;
+    }
+
     private static MissionTask CreateAffinityTask(
         string missionId,
         int sequence,
@@ -4173,6 +4463,118 @@ internal static class SelfTest
 
             throw new InvalidOperationException(
                 "Persisted recovery should not invoke the Supervisor again.");
+        }
+    }
+
+    private sealed class FakeWorkerAppServerTransport(
+        IMissionStore store) :
+        ICodexWorkerAppServerTransport
+    {
+        public List<CodexStructuredRunRequest>
+            FreshRequests { get; } = [];
+
+        public List<(
+            CodexStructuredRunRequest Request,
+            string ParentThreadId)>
+            ForkRequests { get; } = [];
+
+        public Task<CodexStructuredRunResult>
+            RunFreshAsync(
+                CodexStructuredRunRequest request,
+                CancellationToken cancellationToken = default)
+        {
+            FreshRequests.Add(request);
+            return CompleteAsync(
+                request,
+                "fresh",
+                cancellationToken);
+        }
+
+        public Task<CodexStructuredRunResult>
+            RunForkAsync(
+                CodexStructuredRunRequest request,
+                string parentProviderThreadId,
+                CancellationToken cancellationToken = default)
+        {
+            ForkRequests.Add(
+                (request, parentProviderThreadId));
+            return CompleteAsync(
+                request,
+                "fork",
+                cancellationToken);
+        }
+
+        private async Task<CodexStructuredRunResult>
+            CompleteAsync(
+                CodexStructuredRunRequest request,
+                string strategy,
+                CancellationToken cancellationToken)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var session = new AgentSession(
+                $"fake-appserver-{Guid.NewGuid():N}",
+                request.MissionId,
+                AgentSessionRole.Worker,
+                request.Model,
+                request.ReasoningEffort,
+                $"fake-appserver-thread-{Guid.NewGuid():N}",
+                AgentSessionStatus.Closed,
+                request.LeaseOwnerTaskId,
+                1,
+                0,
+                $"appserver_{strategy}",
+                now,
+                now,
+                now);
+
+            await store.UpsertAgentSessionAsync(
+                session,
+                cancellationToken);
+
+            var turnId =
+                $"fake-appserver-turn-{Guid.NewGuid():N}";
+            await store.UpsertAgentTurnAsync(
+                new AgentTurn(
+                    turnId,
+                    request.MissionId,
+                    request.TaskId,
+                    session.Id,
+                    AgentTurnPurpose.Work,
+                    request.Model,
+                    request.ReasoningEffort,
+                    1,
+                    now,
+                    now.AddMilliseconds(5),
+                    5,
+                    100,
+                    80,
+                    0,
+                    10,
+                    2,
+                    110),
+                cancellationToken);
+
+            return new CodexStructuredRunResult(
+                new ProcessRunResult(
+                    "codex app-server",
+                    [],
+                    0,
+                    false,
+                    5,
+                    string.Empty,
+                    string.Empty),
+                "{}",
+                $"{{\"strategy\":\"{strategy}\"}}",
+                new TokenUsage(
+                    100,
+                    80,
+                    10,
+                    2,
+                    110),
+                session.Id,
+                session.ProviderThreadId,
+                1,
+                turnId);
         }
     }
 
