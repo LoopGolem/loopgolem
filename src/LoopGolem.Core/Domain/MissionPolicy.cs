@@ -47,6 +47,8 @@ public sealed record MissionPolicy(
     /// </summary>
     public bool StopAfterPlanning { get; init; }
 
+    public string? SupervisorSourceMissionId { get; init; }
+
     public WorkerContextStrategy EffectiveWorkerContext =>
         WorkerContext ??
         (SessionReuse == SessionReuseMode.Affinity
