@@ -19,8 +19,8 @@ public sealed class CodexWorkerSessionService(
         string prompt,
         CancellationToken cancellationToken = default)
     {
-        if (mission.Policy.SessionReuse ==
-            SessionReuseMode.Disabled)
+        if (mission.Policy.EffectiveWorkerContext ==
+            WorkerContextStrategy.Fresh)
         {
             return await transport.RunStructuredAsync(
                 CreateRequest(
@@ -166,13 +166,21 @@ public sealed class CodexWorkerSessionService(
             terminationReason =
                 "worker_task_rejected";
         }
-        else if (mission.Policy.SessionReuse ==
-                 SessionReuseMode.Disabled)
+        else if (mission.Policy.EffectiveWorkerContext ==
+                 WorkerContextStrategy.Fresh)
         {
             status =
                 AgentSessionStatus.Closed;
             terminationReason ??=
                 "ephemeral";
+        }
+        else if (mission.Policy.EffectiveWorkerContext ==
+                 WorkerContextStrategy.SupervisorFork)
+        {
+            status =
+                AgentSessionStatus.Closed;
+            terminationReason ??=
+                "supervisor_fork_child";
         }
         else if (string.IsNullOrWhiteSpace(
                      session.ProviderThreadId))
