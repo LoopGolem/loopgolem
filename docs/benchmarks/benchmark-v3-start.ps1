@@ -1,7 +1,8 @@
 param(
     [string]$LoopGolemRoot = "C:\Projetos\Github\loopgolem",
     [string]$Workspace = "$env:USERPROFILE\Desktop\benchmark-loopgolem-v3",
-    [string]$Distro = "Ubuntu"
+    [string]$Distro = "Ubuntu",
+    [switch]$ArmFOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -195,9 +196,16 @@ Write-Host ""
 
 Set-ExecutionPolicy -Scope Process Bypass -Force
 
-& $Runner `
-    -LoopGolemRoot $LoopGolemRoot `
-    -Workspace $Workspace `
-    -GoalFile $GoalFile `
-    -AcceptanceScript $AcceptanceScript `
-    -Distro $Distro
+$runnerArguments = @{
+    LoopGolemRoot = $LoopGolemRoot
+    Workspace = $Workspace
+    GoalFile = $GoalFile
+    AcceptanceScript = $AcceptanceScript
+    Distro = $Distro
+}
+
+if ($ArmFOnly) {
+    $runnerArguments.ArmFOnly = $true
+}
+
+& $Runner @runnerArguments
