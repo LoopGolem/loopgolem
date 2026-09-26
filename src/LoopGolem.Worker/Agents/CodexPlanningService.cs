@@ -1278,7 +1278,7 @@ public sealed class CodexPlanningService(
         }
         """;
 
-    private const string PlannerWorkerSchema =
+    internal const string PlannerWorkerSchema =
         """
         {
           "type": "object",
