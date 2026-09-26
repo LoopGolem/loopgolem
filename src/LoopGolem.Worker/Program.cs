@@ -28,10 +28,16 @@ var supervisor =
     new CodexSupervisorSessionService(
         codexTransport,
         store);
+var forkTransport =
+    new CodexSupervisorForkTransport(
+        processRunner,
+        codex,
+        store);
 var workerSessions =
     new CodexWorkerSessionService(
         codexTransport,
-        store);
+        store,
+        forkTransport);
 var validatorSessions =
     new CodexValidatorSessionService(
         codexTransport,
