@@ -1,3 +1,4 @@
+using System.Text.Json;
 using LoopGolem.Core.Domain;
 using LoopGolem.Orchestrator;
 using DomainTaskStatus = LoopGolem.Core.Domain.TaskStatus;
@@ -10,6 +11,9 @@ public sealed class CodexWorkerSessionService(
     ICodexWorkerAppServerTransport? appServerTransport = null)
 {
     private const int MinimumAffinityScore = 3;
+
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
 
     public async Task<CodexStructuredRunResult> RunWorkAsync(
         Mission mission,
@@ -307,13 +311,48 @@ public sealed class CodexWorkerSessionService(
                         session.LastUsedAtUtc)
                 .FirstOrDefault();
 
-        if (supervisor is null)
+        if (supervisor is not null)
         {
-            throw new InvalidOperationException(
-                "SupervisorFork requires an active Supervisor provider thread. Planning must complete successfully before Worker execution.");
+            return supervisor.ProviderThreadId!;
         }
 
-        return supervisor.ProviderThreadId!;
+        var snapshot =
+            await store.GetAsync(
+                missionId,
+                cancellationToken);
+        var plannerTask =
+            snapshot?.Tasks
+                .Where(task =>
+                    task.Kind ==
+                        MissionTaskKind.PlanMission &&
+                    !string.IsNullOrWhiteSpace(
+                        task.ResultDetails))
+                .OrderByDescending(
+                    task => task.Sequence)
+                .FirstOrDefault();
+
+        if (plannerTask?.ResultDetails is { } details)
+        {
+            try
+            {
+                var frozen =
+                    JsonSerializer.Deserialize<PlannerResult>(
+                        details,
+                        JsonOptions);
+
+                if (!string.IsNullOrWhiteSpace(
+                        frozen?.SupervisorProviderThreadId))
+                {
+                    return frozen.SupervisorProviderThreadId;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        throw new InvalidOperationException(
+            "SupervisorFork requires a persisted Supervisor thread from live planning or a frozen PlannerResult that contains SupervisorProviderThreadId.");
     }
 
     private async Task<AgentSession?>
