@@ -2,7 +2,7 @@
 
 This roadmap records the current engineering priorities for LoopGolem. It is intentionally evidence-driven: experimental findings should change priorities before large implementation work begins.
 
-Last updated after C5 and the allowance-strategy implementation work on 2026-09-26.
+Last updated after the first TaskForge benchmark v3 run and immediate remediation work on 2026-09-26.
 
 ## Current baseline
 
@@ -61,22 +61,35 @@ The C5 script contained an extra exact-equality guard for Control A vs Control B
 
 See `docs/context-fork-cache-investigation.md` for the complete result and limitations.
 
-## P0.5 — Allowance-strategy benchmark
+## P0.5 — Allowance-strategy benchmark — first run inconclusive
 
 C4/C5 proved that Supervisor fork lineage can preserve a warm prompt cache when Planner and Worker use a stable structured-output schema. Separate observations of the included five-hour allowance, however, suggest that prompt-cache telemetry may not predict subscription-window consumption.
 
-Before optimizing further for cached-token economics, compare two complete execution policies against the exact same frozen PlannerResult:
+The first controlled TaskForge v3 run on 2026-09-26 compared the intended policies against one frozen PlannerResult, but it did **not** produce a valid F/H winner:
 
-- **SupervisorFork + Low**: inherit the persistent HIGH Supervisor context, then lower the child on `turn/start`;
-- **Fresh + High**: give each bounded microtask to a fresh HIGH Worker with no Supervisor lineage.
+- **Arm F — SupervisorFork + Low** failed before its first model turn because `thread/fork` returned `reasoningEffort=null`; F therefore recorded zero model tokens and cannot be used for cost comparison.
+- The fork model-mismatch guard did not fire before the effort guard, so the attempted pinned child matched the requested `gpt-6-luna` model in this run.
+- **Arm H — Fresh + High** reached `Completed` in 587.758 s with 1,005,320 reported mission tokens, including 640,000 cached input tokens.
+- H moved the programmatic five-hour meter from 0% to 1% used and the visible UI from 100% to 99% remaining.
+- H's external acceptance result is unresolved rather than a product failure: Windows PowerShell 5.1 converted the intentionally invalid-ID stderr into a terminating `NativeCommandError` before the harness could inspect the expected non-zero exit code.
+- The plan-only mission reported 18,409 tokens. F reported zero because it stopped before `turn/start`.
 
-This is a product-strategy benchmark rather than a single-variable causal experiment. Its primary metric is useful completed work per visible five-hour allowance point. Raw input/cached/cache-write/output/reasoning telemetry remains mandatory but secondary.
+Immediate remediation is now the priority before another quota-intensive pair:
 
-Implementation support now includes explicit Worker context/reasoning policy, shared Planner/Worker structured output, an experimental app-server SupervisorFork transport, plan-only missions, missions created from a frozen PlannerResult, and `SupervisorSourceMissionId` binding from Arm F to the exact paused plan-only mission that generated that frozen result.
+1. explicitly configure the fork child as HIGH during `thread/fork` rather than relying on implicit inheritance;
+2. keep the returned-model and returned-effort guards;
+3. fix expected native-stderr capture in the PowerShell 5.1 acceptance harness;
+4. run the no-turn old-style-vs-pinned fork model identity probe to test the historical Astra/Luna hypothesis without model inference;
+5. rerun external acceptance against the existing H artifact with no model inference;
+6. run a narrow F-only smoke/measurement before another complete F/H benchmark.
 
-Release build with warnings-as-errors and Worker self-test are green on both Ubuntu and Windows for this pre-benchmark implementation. Do not select the product default until the controlled benchmark in `docs/benchmark-v3-allowance-strategy.md` has been run.
+Do not interpret F's 0% allowance delta as evidence of cheap fork execution: F executed zero model turns.
 
-Regardless of the winner, preserve both execution policies because token-equivalent economics and included-plan allowance economics may favor different shapes.
+Do not claim that historical unpinned forks used Astra unless the no-turn probe or equivalent direct evidence demonstrates it. Earlier probes verified Luna parent identity, not every child fork identity.
+
+The full first-run record is in `docs/benchmarks/taskforge-v3-results.md`. The benchmark design remains in `docs/benchmark-v3-allowance-strategy.md`.
+
+Regardless of the eventual winner, preserve both execution policies because token-equivalent economics and included-plan allowance economics may favor different shapes.
 
 ## P1 — Stable agent-turn envelope
 
