@@ -101,7 +101,7 @@ function Start-BenchmarkWorker {
         throw "A LoopGolem Worker is already reachable on '$PipeName'. Stop Desktop/Worker instances before running the benchmark."
     }
 
-    $workerDll = Join-Path $LoopGolemRoot "src\LoopGolem.Worker\bin\Release\net10.0\LoopGolem.Worker.dll"
+    $workerDll = Join-Path $LoopGolemRoot "src\LoopGolem.Worker\bin\Release\net10.0\loopgolem-worker.dll"
     if (-not (Test-Path -LiteralPath $workerDll)) {
         throw "Release Worker DLL not found: $workerDll"
     }
@@ -425,7 +425,7 @@ function Invoke-MeasuredArm {
         }
 
         $before = Get-StableAllowanceBaseline -Label "$Arm-before"
-        $visibleBefore = Read-Host "Arm $Arm: enter visible UI remaining percent now (or leave blank)"
+        $visibleBefore = Read-Host "Arm $($Arm): enter visible UI remaining percent now (or leave blank)"
 
         $request = [ordered]@{
             type = "createMission"
@@ -463,7 +463,7 @@ function Invoke-MeasuredArm {
         Write-JsonArtifact -Path (Join-Path $ArtifactsRoot "$Arm-mission.json") -Value $terminal
 
         $post = Get-PostArmAllowance -Arm $Arm
-        $visibleAfter = Read-Host "Arm $Arm: enter visible UI remaining percent after the settled read (or leave blank)"
+        $visibleAfter = Read-Host "Arm $($Arm): enter visible UI remaining percent after the settled read (or leave blank)"
         $acceptance = Invoke-ExternalAcceptance -Arm $Arm
 
         $missionStatus = [int]$terminal.mission.mission.status
