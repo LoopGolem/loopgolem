@@ -222,7 +222,7 @@ public sealed class CodexAppServerWorkerTransport :
                     ? AgentSessionStatus.Closed
                     : AgentSessionStatus.Invalidated,
                 TurnCount = turnNumber,
-                MicrotaskCount = 1,
+                MicrotaskCount = 0,
                 LeaseOwnerTaskId = null,
                 TerminationReason = outcome.Success
                     ? parentProviderThreadId is null
