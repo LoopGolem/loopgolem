@@ -185,6 +185,8 @@ public sealed class WorkerPipeServer(
                 if (request.SessionReuse is { } ||
                     request.WorkerContext is { } ||
                     request.WorkerReasoning is { } ||
+                    !string.IsNullOrWhiteSpace(
+                        request.SupervisorSourceMissionId) ||
                     request.StopAfterPlanning)
                 {
                     policy = MissionPolicy.Default;
@@ -210,6 +212,16 @@ public sealed class WorkerPipeServer(
                         policy = policy with
                         {
                             WorkerReasoning = requestedReasoning
+                        };
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(
+                            request.SupervisorSourceMissionId))
+                    {
+                        policy = policy with
+                        {
+                            SupervisorSourceMissionId =
+                                request.SupervisorSourceMissionId
                         };
                     }
 
