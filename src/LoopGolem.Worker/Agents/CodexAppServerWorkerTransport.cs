@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using LoopGolem.Core.Domain;
+using LoopGolem.Core.Protocol;
 using LoopGolem.Orchestrator;
 using LoopGolem.Worker.Infrastructure;
 
@@ -18,6 +19,9 @@ public interface ICodexWorkerAppServerTransport
     Task<CodexStructuredRunResult> RunForkAsync(
         CodexStructuredRunRequest request,
         string parentProviderThreadId,
+        CancellationToken cancellationToken = default);
+
+    Task<CodexAllowanceSnapshot> ReadAllowanceAsync(
         CancellationToken cancellationToken = default);
 }
 
@@ -89,6 +93,31 @@ public sealed class CodexAppServerWorkerTransport :
             request,
             parentProviderThreadId,
             cancellationToken);
+    }
+
+    public async Task<CodexAllowanceSnapshot> ReadAllowanceAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await _executionGate.WaitAsync(
+            cancellationToken);
+        try
+        {
+            await EnsureStartedAsync(
+                cancellationToken);
+
+            var response =
+                await SendRequestAsync(
+                    "account/rateLimits/read",
+                    parameters: null,
+                    cancellationToken);
+
+            return ParseAllowanceSnapshot(
+                response);
+        }
+        finally
+        {
+            _executionGate.Release();
+        }
     }
 
     private async Task<CodexStructuredRunResult> RunAsync(
@@ -951,6 +980,123 @@ public sealed class CodexAppServerWorkerTransport :
             completion.TrySetException(
                 exception);
         }
+    }
+
+    private static CodexAllowanceSnapshot
+        ParseAllowanceSnapshot(
+            JsonElement response)
+    {
+        if (!response.TryGetProperty(
+                "rateLimits",
+                out var rateLimits))
+        {
+            throw new InvalidDataException(
+                "account/rateLimits/read returned no rateLimits snapshot.");
+        }
+
+        static double? UsedPercent(
+            JsonElement parent,
+            string name) =>
+            parent.TryGetProperty(
+                    name,
+                    out var window) &&
+                window.ValueKind ==
+                    JsonValueKind.Object &&
+                window.TryGetProperty(
+                    "usedPercent",
+                    out var value) &&
+                value.TryGetDouble(
+                    out var number)
+                ? number
+                : null;
+
+        static int? WindowMinutes(
+            JsonElement parent,
+            string name)
+        {
+            if (!parent.TryGetProperty(
+                    name,
+                    out var window) ||
+                window.ValueKind !=
+                    JsonValueKind.Object ||
+                !window.TryGetProperty(
+                    "windowDurationMins",
+                    out var value) ||
+                value.ValueKind ==
+                    JsonValueKind.Null)
+            {
+                return null;
+            }
+
+            return value.TryGetInt32(
+                out var number)
+                ? number
+                : null;
+        }
+
+        static long? ResetsAt(
+            JsonElement parent,
+            string name)
+        {
+            if (!parent.TryGetProperty(
+                    name,
+                    out var window) ||
+                window.ValueKind !=
+                    JsonValueKind.Object ||
+                !window.TryGetProperty(
+                    "resetsAt",
+                    out var value) ||
+                value.ValueKind ==
+                    JsonValueKind.Null)
+            {
+                return null;
+            }
+
+            return value.TryGetInt64(
+                out var number)
+                ? number
+                : null;
+        }
+
+        bool? ordinaryUsageAllowed = null;
+        if (response.TryGetProperty(
+                "ordinaryUsageAllowed",
+                out var ordinary) &&
+            ordinary.ValueKind is
+                JsonValueKind.True or
+                JsonValueKind.False)
+        {
+            ordinaryUsageAllowed =
+                ordinary.GetBoolean();
+        }
+
+        return new CodexAllowanceSnapshot(
+            DateTimeOffset.UtcNow,
+            UsedPercent(
+                rateLimits,
+                "primary"),
+            WindowMinutes(
+                rateLimits,
+                "primary"),
+            ResetsAt(
+                rateLimits,
+                "primary"),
+            UsedPercent(
+                rateLimits,
+                "secondary"),
+            WindowMinutes(
+                rateLimits,
+                "secondary"),
+            ResetsAt(
+                rateLimits,
+                "secondary"),
+            ordinaryUsageAllowed,
+            GetString(
+                rateLimits,
+                "limitId"),
+            GetString(
+                rateLimits,
+                "limitName"));
     }
 
     private static string GetThreadId(
