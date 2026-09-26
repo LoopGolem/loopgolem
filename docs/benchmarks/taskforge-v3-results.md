@@ -6,9 +6,11 @@ This document records the first execution of the benchmark defined in
 `docs/benchmark-v3-allowance-strategy.md`.
 
 The run is **inconclusive as a strategy comparison**. Arm F failed before any
-model turn, while Arm H completed the LoopGolem mission but the external
-acceptance harness aborted on a Windows PowerShell 5.1 stderr-handling bug.
-No product-policy winner should be selected from this run.
+model turn, while Arm H completed the LoopGolem mission. Its original external
+acceptance capture aborted on a Windows PowerShell 5.1 stderr-handling bug, but
+the preserved H artifact was rerun through the corrected harness with **PASS**
+and no additional model inference. No product-policy winner should be selected
+from this run because Arm F never executed a model turn.
 
 The run is still useful because it exposed two benchmark/runtime defects and
 produced a clean allowance/token observation for the Fresh + High arm.
@@ -63,8 +65,8 @@ the benchmark consumed any model allowance.
 | Total tokens | 18,409 | 0 | 1,005,320 |
 | Programmatic 5h used | — | 0% -> 0% | 0% -> 1% |
 | Visible UI remaining | — | 100% -> 100% | 100% -> 99% |
-| External acceptance | not applicable | not reached meaningfully | harness aborted |
-| Functional eligibility | not applicable | no | unresolved |
+| External acceptance | not applicable | not reached meaningfully | PASS after harness fix, no new inference |
+| Functional eligibility | not applicable | no | yes |
 
 Arm H role telemetry:
 
@@ -172,12 +174,23 @@ surfaced as a `NativeCommandError`. Because the harness used
 `$ErrorActionPreference = "Stop"`, PowerShell aborted the harness before it
 could inspect the expected non-zero native exit code.
 
-Therefore `externalAcceptance=false` in this run is not evidence that the
-invalid-ID behavior was wrong. The remaining acceptance checks were not
-completed, so Arm H is still **unresolved**, not retroactively declared PASS.
+Therefore `externalAcceptance=false` in the original capture was not evidence
+that the invalid-ID behavior was wrong.
 
-The harness has been changed to capture native stderr under a temporary
-`Continue` preference, then evaluate `$LASTEXITCODE` explicitly.
+The harness was changed to capture native stderr under a temporary `Continue`
+preference and then evaluate `$LASTEXITCODE` explicitly. The preserved H
+workspace was rerun through that corrected harness without any new model
+inference. The result was:
+
+```text
+TaskForge external acceptance: PASS
+```
+
+Arm H is therefore functionally eligible for this run: LoopGolem mission
+`Completed`, internal Validator accepted the snapshot, deterministic Release
+build passed, and the corrected independent external acceptance suite passed.
+This does not create a strategy winner because Arm F never executed a model
+turn and cannot be compared economically or functionally.
 
 ## Interpretation
 
@@ -192,7 +205,8 @@ What the run establishes:
 4. Fresh + High can complete the mission with the frozen plan;
 5. roughly one million reported Arm H tokens coincided with one visible
    percentage point of five-hour allowance in this isolated run;
-6. the PowerShell 5.1 acceptance harness needs special native-stderr handling.
+6. the PowerShell 5.1 acceptance harness needs special native-stderr handling;
+7. after that harness fix, the preserved Arm H artifact passes the full external acceptance suite without additional model inference.
 
 What the run does **not** establish:
 
@@ -200,15 +214,12 @@ What the run does **not** establish:
 - that SupervisorFork + Low is functionally viable;
 - that historical unpinned forks used Astra;
 - that one million Luna tokens always cost one five-hour percentage point;
-- that Arm H fully passed external acceptance.
 
 ## Next steps
 
-1. rerun the external acceptance harness against the preserved H artifact with
-   no model inference;
-2. run the no-turn old-style-vs-pinned fork model identity probe;
-3. validate the explicit-HIGH fork fix with deterministic CI/self-tests;
-4. run a narrow F-only smoke/measurement before paying for another full F/H
+1. run the no-turn old-style-vs-pinned fork model identity probe;
+2. validate the explicit-HIGH fork fix with deterministic CI/self-tests;
+3. run a narrow F-only smoke/measurement before paying for another full F/H
    pair;
-5. only after F executes real Worker turns, repeat the paired strategy
+4. only after F executes real Worker turns, repeat the paired strategy
    benchmark with the same frozen-input controls.
