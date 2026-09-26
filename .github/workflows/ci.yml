@@ -55,6 +55,9 @@ jobs:
           }
 
 
+      - name: Parse benchmark v3 Python
+        run: python -m py_compile docs/benchmarks/probe-fork-model-no-turn.py
+
       - name: Windows PowerShell 5.1 benchmark compatibility
         if: runner.os == 'Windows'
         shell: powershell
@@ -90,4 +93,22 @@ jobs:
           $hash = ([BitConverter]::ToString($hashBytes)).Replace("-", "").ToLowerInvariant()
           if ($hash -ne '1b1fd2bc6257cecf2a60fda1b579fb9f4f742d16dfdd299fa12070ab0b2e1d79') {
             throw "Canonical TaskForge prompt hash mismatch: $hash"
+          }
+
+          $previousErrorActionPreference = $ErrorActionPreference
+          try {
+            $ErrorActionPreference = 'Continue'
+            $captured = @(& cmd.exe /d /c "echo expected-native-stderr 1>&2 & exit /b 7" 2>&1)
+            $nativeExitCode = $LASTEXITCODE
+          }
+          finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+          }
+
+          if ($nativeExitCode -ne 7) {
+            throw "Expected native exit code 7, observed $nativeExitCode."
+          }
+
+          if (($captured | Out-String) -notmatch 'expected-native-stderr') {
+            throw "Expected native stderr was not captured."
           }
