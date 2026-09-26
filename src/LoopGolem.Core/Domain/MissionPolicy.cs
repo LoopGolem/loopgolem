@@ -41,6 +41,12 @@ public sealed record MissionPolicy(
     public WorkerReasoningEffort WorkerReasoning { get; init; } =
         WorkerReasoningEffort.Low;
 
+    /// <summary>
+    /// Benchmark-only control that pauses a mission immediately after the
+    /// PlannerResult is persisted and expanded.
+    /// </summary>
+    public bool StopAfterPlanning { get; init; }
+
     public WorkerContextStrategy EffectiveWorkerContext =>
         WorkerContext ??
         (SessionReuse == SessionReuseMode.Affinity
