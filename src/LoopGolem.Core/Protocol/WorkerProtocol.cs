@@ -81,7 +81,9 @@ public sealed record WorkerRequest(
     MissionExecutionMode ExecutionMode = MissionExecutionMode.Codex,
     SessionReuseMode? SessionReuse = null,
     WorkerContextStrategy? WorkerContext = null,
-    WorkerReasoningEffort? WorkerReasoning = null);
+    WorkerReasoningEffort? WorkerReasoning = null,
+    bool PauseAfterPlanning = false,
+    string? FrozenPlannerResultJson = null);
 
 public sealed record WorkerResponse(
     bool Success,
