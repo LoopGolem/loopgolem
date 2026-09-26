@@ -482,6 +482,39 @@ The first Q1 baseline was 18%, whereas the final rolling snapshot observed durin
 
 Practical consequence: do not use per-turn `account/rateLimits/updated` deltas as a cost metric. Continue to record raw token telemetry as the primary per-turn measurement and treat the five-hour percentage only as a coarse account-level operational constraint.
 
+## Probe C4 — cache-positive fork/effort/schema protocol
+
+C4 is the first cache experiment that is conditional on proving the relevant child prefix is actually warm before spending LOW comparison turns.
+
+Topology:
+
+```text
+Parent HIGH / Planner
+        |
+        +-- HIGH / Planner warm attempt 1
+        +-- HIGH / Planner warm attempt 2 (if needed)
+        +-- HIGH / Planner warm attempt 3 (if needed)
+                |
+                +-- proceed only after Cached > 0
+                        |
+                        +-- LOW / Planner
+                        +-- LOW / Worker
+                        +-- HIGH / Planner final control
+```
+
+All children fork from the same immutable parent checkpoint. The Planner children use the same follow-up text and PlannerSchema. The LOW / Worker arm changes only the output schema/follow-up required by WorkerSchema. LOW effort is applied dynamically after forking a HIGH child, using the app-server per-turn effort mechanism already validated by Probe 3C.
+
+Causal interpretation rules:
+
+1. If no HIGH / Planner warm attempt reports non-zero cached input, abort before any LOW turn. C4 is inconclusive and consumes no LOW comparison quota.
+2. The first cache-positive HIGH / Planner child is the pre-comparison control.
+3. Compare that cache-positive HIGH / Planner control with LOW / Planner to test whether the dynamic HIGH -> LOW transition preserves the warmed prefix.
+4. Compare LOW / Planner with LOW / Worker to observe the incremental effect of PlannerSchema -> WorkerSchema, but only if LOW / Planner itself remains cache-positive.
+5. Run a final HIGH / Planner control immediately afterward. If the final HIGH control loses the cache hit, treat cache routing/availability as unstable and avoid causal claims about either LOW arm.
+6. Record input, cached input, cache-write input, output, reasoning output, duration, and post-turn reasoning effort for every arm.
+
+Bounded quota rule: at most three HIGH warming attempts. Do not loop until a hit indefinitely.
+
 ## Production architecture implication
 
 Migration from one-shot `codex exec` orchestration to Codex app-server should now appear on the LoopGolem roadmap as a serious post-v0.1 architecture item.
