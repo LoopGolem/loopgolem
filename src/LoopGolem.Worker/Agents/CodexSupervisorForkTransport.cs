@@ -145,6 +145,7 @@ public sealed class CodexSupervisorForkTransport(
                     new
                     {
                         threadId = parentProviderThreadId,
+                        model,
                         cwd = appWorkspace,
                         approvalPolicy = "never",
                         sandbox = "workspace-write",
@@ -159,6 +160,22 @@ public sealed class CodexSupervisorForkTransport(
                     .GetString()
                 ?? throw new InvalidDataException(
                     "thread/fork returned no child thread id.");
+
+            var forkedModel =
+                fork.TryGetProperty(
+                    "model",
+                    out var forkModel)
+                    ? forkModel.GetString()
+                    : null;
+
+            if (!string.Equals(
+                    forkedModel,
+                    model,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Forked Worker model is '{forkedModel ?? "(null)"}' instead of '{model}'.");
+            }
 
             var inheritedEffort =
                 fork.TryGetProperty(
@@ -412,6 +429,7 @@ public sealed class CodexSupervisorForkTransport(
                         providerTurnId,
                         logicalTurnId,
                         model,
+                        forkedModel,
                         reasoning = reasoningEffort,
                         inheritedEffort,
                         finalEffort,
